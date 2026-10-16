@@ -1,4 +1,4 @@
-# Computer Club Telegram Bot
+# KFUPM Computer Club Telegram Bot
 
 A bot that sends announcements to the club's Telegram groups and reminds members about upcoming events.
 
