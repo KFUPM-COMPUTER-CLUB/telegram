@@ -15,13 +15,6 @@ A bot that sends announcements to the club's Telegram groups and reminds members
 
 Groups are registered automatically when an admin adds the bot to them (and removed when the bot is removed). Use `/groups` to see the list.
 
-## Who owns what
-| File | Owner |
-|---|---|
-| main.py, database.py, admin.py | Project manager |
-| events.py | Member 1 |
-| announcements.py | Member 2 |
-
 ## Rules
 - Never commit `.env` or `bot.db`.
 - Never edit `main` directly. Work on your own branch and open a pull request.
