@@ -18,6 +18,9 @@ def admin_only(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         user = update.effective_user
         if user is None or not database.is_admin(user.id):
+            # events feature: answer button presses so the spinner stops for non-admins
+            if update.callback_query:
+                await update.callback_query.answer()
             await update.effective_message.reply_text("⛔ This command is for administrators only.")
             return None
         return await func(update, context, *args, **kwargs)
@@ -40,6 +43,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/groups - list of registered groups\n"
         "/addadmin <user_id> - add an admin\n"
         "/removeadmin <user_id> - remove an admin\n"
+        # events feature: added the Event Commands section so /addevent /deleteevent /editevent are reachable from /help.
+        "\n📅 Event Commands:\n"
+        "/events - View upcoming events\n"
+        "/addevent - Add a new event (Admin)\n"
+        "/deleteevent - Delete an event (Admin)\n"
+        "/editevent - Edit an event's name or date (Admin)\n"
         "\nTo register a group, just add the bot to that group."
     )
 
