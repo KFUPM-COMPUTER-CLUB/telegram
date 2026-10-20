@@ -50,6 +50,13 @@ def create_tables():
                 text TEXT NOT NULL,
                 send_time TEXT NOT NULL
             );
+            -- Added for event reminders: remembers which (event, date) already got a reminder,
+            -- so the bot never sends one twice, even after a restart.
+            CREATE TABLE IF NOT EXISTS reminders_sent (
+                event_id INTEGER NOT NULL,
+                event_date TEXT NOT NULL,
+                PRIMARY KEY (event_id, event_date)
+            );
             """
         )
         conn.commit()
@@ -92,3 +99,59 @@ def unregister_group(group_id):
 def get_groups():
     """All registered groups, as a list of dicts with 'group_id' and 'title'."""
     return _run("SELECT * FROM telegram_groups ORDER BY title, group_id", fetch="all")
+
+# ---------- Events ----------
+# Added for the add-event feature (events.py): saves a new event row.
+
+def add_event(title, date):
+    """Saves an event. date must be text in the form 'YYYY-MM-DD'. Returns the new event id."""
+    return _run("INSERT INTO events (title, date) VALUES (?, ?)", (title, date), "id")
+
+
+# Added for /events: lists events that haven't passed yet.
+def get_upcoming_events(today):
+    """Events dated today or later, soonest first. today must be text 'YYYY-MM-DD'."""
+    return _run("SELECT * FROM events WHERE date >= ? ORDER BY date, id", (today,), "all")
+
+
+# Added for /deleteevent: looks up one event (for the success message) and removes it.
+def get_event(event_id):
+    """One event as a dict, or None if that id doesn't exist."""
+    return _run("SELECT * FROM events WHERE id = ?", (event_id,), "one")
+
+
+def delete_event(event_id):
+    """Deletes the event with that id. Returns 1 if it existed, 0 if not."""
+    _run("DELETE FROM reminders_sent WHERE event_id = ?", (event_id,))  # added: tidy up reminder rows
+    return _run("DELETE FROM events WHERE id = ?", (event_id,))
+
+
+# Added for /editevent: change one field of an existing event.
+def update_event_title(event_id, title):
+    return _run("UPDATE events SET title = ? WHERE id = ?", (title, event_id))
+
+
+def update_event_date(event_id, date):
+    """date must be text 'YYYY-MM-DD'."""
+    return _run("UPDATE events SET date = ? WHERE id = ?", (date, event_id))
+
+
+# Added for automatic reminders.
+def get_events_needing_reminder(dates):
+    """Events whose date is one of the given 'YYYY-MM-DD' strings and that haven't had a
+    reminder for that date yet. Editing an event's date makes it due again."""
+    placeholders = ",".join("?" * len(dates))
+    return _run(
+        f"SELECT * FROM events e WHERE e.date IN ({placeholders}) AND NOT EXISTS "
+        "(SELECT 1 FROM reminders_sent r WHERE r.event_id = e.id AND r.event_date = e.date) "
+        "ORDER BY e.date, e.id",
+        tuple(dates),
+        "all",
+    )
+
+
+def mark_reminder_sent(event_id, event_date):
+    _run(
+        "INSERT OR IGNORE INTO reminders_sent (event_id, event_date) VALUES (?, ?)",
+        (event_id, event_date),
+    )
