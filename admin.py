@@ -28,31 +28,45 @@ def admin_only(func):
     return wrapper
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Welcome to the Computer Club bot!\nUse /help to see what I can do."
-    )
+# What normal users see with /help. Only commands that everyone may use.
+USER_HELP = (
+    "Commands:\n"
+    "/help - this list\n"
+    "/events - view upcoming events"
+)
+
+# What admins see with /adminhelp, grouped by topic.
+ADMIN_HELP = (
+    "🔧 Admin commands\n"
+    "\n📅 Events\n"
+    "/addevent - add a new event\n"
+    "/editevent - edit an event's name or date\n"
+    "/deleteevent - delete an event\n"
+    "/sendreminder - remind all groups about an event now\n"
+    "Groups also get an automatic reminder the day before each event.\n"
+    "\n👥 Groups\n"
+    "/groups - list the registered groups\n"
+    "To register a group, an admin just adds the bot to it.\n"
+    "\n🛡 Admins\n"
+    "/addadmin <user_id> - add an admin\n"
+    "/removeadmin <user_id> - remove an admin\n"
+    "/adminhelp - show this list"
+)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Commands:\n"
-        "/start - welcome message\n"
-        "/help - this list\n"
-        "\nAdmin commands:\n"
-        "/groups - list of registered groups\n"
-        "/addadmin <user_id> - add an admin\n"
-        "/removeadmin <user_id> - remove an admin\n"
-        # events feature: added the Event Commands section so /addevent /deleteevent /editevent are reachable from /help.
-        "\n📅 Event Commands:\n"
-        "/events - View upcoming events\n"
-        "/addevent - Add a new event (Admin)\n"
-        "/deleteevent - Delete an event (Admin)\n"
-        "/editevent - Edit an event's name or date (Admin)\n"
-        "/sendreminder - Remind all groups about an event now (Admin)\n"
-        "\nTo register a group, just add the bot to that group.\n"
-        "Groups get a reminder automatically the day before each event."
-    )
+    """/help - open to everyone. Lists only the commands normal users can use."""
+    text = USER_HELP
+    user = update.effective_user
+    if user is not None and database.is_admin(user.id):
+        text += "\n\n🔧 You're an admin: send /adminhelp to see your commands."
+    await update.message.reply_text(text)
+
+
+@admin_only
+async def admin_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/adminhelp - admins only. Lists the admin commands."""
+    await update.message.reply_text(ADMIN_HELP)
 
 
 async def track_bot_membership(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -120,8 +134,8 @@ async def remove_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 def get_handlers():
     return [
-        CommandHandler("start", start),
         CommandHandler("help", help_command),
+        CommandHandler("adminhelp", admin_help_command),
         CommandHandler("groups", list_groups),
         CommandHandler("addadmin", add_admin_command),
         CommandHandler("removeadmin", remove_admin_command),
