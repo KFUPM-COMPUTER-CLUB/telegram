@@ -1,7 +1,7 @@
 """events.py - event commands (/addevent, /events, /deleteevent, /editevent, /sendreminder)
 and the automatic day-before reminders sent to all registered groups."""
-import calendar
 import logging
+import re
 from datetime import date, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 
 # Conversation steps. ConversationHandler remembers which step each user is on and sends
 # their next message to the matching function below.
-NAME, YEAR, MONTH, DAY = range(4)
-E_CHOOSE_EVENT, E_CHOOSE_FIELD, E_NEW_NAME, E_CHOOSE_PART, E_NEW_VALUE = range(10, 15)
+NAME, DATE = range(2)
+E_CHOOSE_EVENT, E_CHOOSE_FIELD, E_NEW_NAME, E_NEW_DATE = range(10, 14)
 
 MAX_YEARS_AHEAD = 10  # rejects typos like 20260
 MAX_TITLE_LENGTH = 100
@@ -33,17 +33,10 @@ MAX_TITLE_LENGTH = 100
 REMINDER_TIME = time(hour=9, minute=0, tzinfo=ZoneInfo("Asia/Riyadh"))
 
 
-def _parse_int(text):
-    """Returns the number in text, or None if it isn't a whole number."""
-    try:
-        return int(text.strip())
-    except ValueError:
-        return None
-
-
-# Validation rules shared by /addevent and /editevent. Each returns an error message, or None if OK.
+# Validation rules shared by /addevent and /editevent.
 
 def _check_title(title):
+    """Returns an error message, or None if the title is OK."""
     if not title:
         return "The name can't be empty. Please send the event name."
     if len(title) > MAX_TITLE_LENGTH:
@@ -51,31 +44,22 @@ def _check_title(title):
     return None
 
 
-def _check_year(year):
-    this_year = date.today().year
-    if year is None:
-        return f"Please send the year as a number, e.g. {this_year}."
-    if year < this_year:
-        return f"{year} is in the past. The year must be {this_year} or later."
-    if year > this_year + MAX_YEARS_AHEAD:
-        return f"{year} is too far ahead. Please send a year up to {this_year + MAX_YEARS_AHEAD}."
-    return None
-
-
-def _check_month(month):
-    if month is None or not 1 <= month <= 12:
-        return "The month must be a number from 1 to 12. Try again."
-    return None
-
-
-def _check_day(year, month, day):
-    days_in_month = calendar.monthrange(year, month)[1]  # handles 30/31-day months and leap years
-    if day is None or not 1 <= day <= days_in_month:
-        return (
-            f"{calendar.month_name[month]} {year} has {days_in_month} days. "
-            f"Please send a day from 1 to {days_in_month}."
-        )
-    return None
+def _parse_date(text):
+    """Checks a date typed as YYYY-MM-DD. Returns (date, None) if it's valid, or (None, error message)."""
+    text = text.strip()
+    today = date.today()
+    # Exactly a 4-digit year, 2-digit month and 2-digit day (so '2026-1-5' or '5/1/2026' are rejected).
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", text):
+        return None, f"Please send the date in the format YYYY-MM-DD, e.g. {today.isoformat()}."
+    try:
+        parsed = date.fromisoformat(text)  # raises ValueError for 2026-02-30, month 13, etc.
+    except ValueError:
+        return None, f"{text} isn't a real date. Check the month and day, and use the format YYYY-MM-DD."
+    if parsed < today:
+        return None, f"{text} has already passed. Please send today's date ({today.isoformat()}) or later."
+    if parsed.year > today.year + MAX_YEARS_AHEAD:
+        return None, f"{parsed.year} is too far ahead. Please send a year up to {today.year + MAX_YEARS_AHEAD}."
+    return parsed, None
 
 
 # ---------- Add event conversation ----------
@@ -98,61 +82,19 @@ async def add_event_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return NAME
 
     context.user_data["new_event"]["title"] = title
-    await update.message.reply_text(f"Got it: “{title}”.\nNow send the year (e.g. {date.today().year}).")
-    return YEAR
-
-
-async def add_event_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    year = _parse_int(update.message.text)
-    error = _check_year(year)
-    if error:
-        await update.message.reply_text(error)
-        return YEAR
-
-    context.user_data["new_event"]["year"] = year
-    await update.message.reply_text("Now send the month as a number (1-12).")
-    return MONTH
-
-
-async def add_event_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    today = date.today()
-    year = context.user_data["new_event"]["year"]
-    month = _parse_int(update.message.text)
-    error = _check_month(month)
-    if error:
-        await update.message.reply_text(error)
-        return MONTH
-    if year == today.year and month < today.month:
-        await update.message.reply_text(
-            f"Month {month} of {year} has already passed. Please send month {today.month} or later."
-        )
-        return MONTH
-
-    context.user_data["new_event"]["month"] = month
-    days_in_month = calendar.monthrange(year, month)[1]  # handles 30/31-day months and leap years
     await update.message.reply_text(
-        f"Now send the day (1-{days_in_month} for {calendar.month_name[month]} {year})."
+        f"Got it: “{title}”.\nNow send the date in the format YYYY-MM-DD (e.g. {date.today().isoformat()})."
     )
-    return DAY
+    return DATE
 
 
-async def add_event_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    today = date.today()
-    event = context.user_data["new_event"]
-    year, month = event["year"], event["month"]
-    day = _parse_int(update.message.text)
-    error = _check_day(year, month, day)
+async def add_event_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    event_date, error = _parse_date(update.message.text)
     if error:
         await update.message.reply_text(error)
-        return DAY
+        return DATE
 
-    event_date = date(year, month, day)
-    if event_date < today:
-        await update.message.reply_text(
-            f"{event_date.isoformat()} has already passed. Please send today's day ({today.day}) or later."
-        )
-        return DAY
-
+    event = context.user_data["new_event"]
     event_id = database.add_event(event["title"], event_date.isoformat())  # stored as 'YYYY-MM-DD'
     logger.info("Event #%s '%s' added for %s.", event_id, event["title"], event_date)
 
@@ -186,7 +128,7 @@ def _when(event_date, today):
 
 
 def _format_events(events, today):
-    """Numbered list text shared by /events and /deleteevent."""
+    """Numbered list text shared by /events, /editevent and /sendreminder."""
     lines = [f"📅 Upcoming events ({len(events)}):\n"]
     for i, event in enumerate(events, start=1):
         event_date = date.fromisoformat(event["date"])
@@ -214,29 +156,27 @@ BUTTONS_PER_ROW = 5
 
 @admin.admin_only
 async def delete_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/deleteevent - shows the upcoming list with one numbered button per event."""
-    today = date.today()
-    events = database.get_upcoming_events(today.isoformat())
+    """/deleteevent - shows one button per upcoming event, labelled with the event's name."""
+    events = database.get_upcoming_events(date.today().isoformat())
     if not events:
         await update.message.reply_text("📅 No upcoming events to delete.\nUse /help to see the commands.")
         return
 
     # Each button's callback_data carries the event id, e.g. "delevent:7", so the press
-    # can be matched to the right row even if the numbering changes later.
+    # can be matched to the right row. One button per row, since names can be long.
     buttons = [
-        InlineKeyboardButton(str(i), callback_data=f"delevent:{event['id']}")
-        for i, event in enumerate(events, start=1)
+        [InlineKeyboardButton(event["title"], callback_data=f"delevent:{event['id']}")]
+        for event in events
     ]
-    rows = [buttons[i : i + BUTTONS_PER_ROW] for i in range(0, len(buttons), BUTTONS_PER_ROW)]
     await update.message.reply_text(
-        _format_events(events, today) + "\n\n🗑 Tap the number of the event to delete:",
-        reply_markup=InlineKeyboardMarkup(rows),
+        "🗑 Tap the event you want to delete:",
+        reply_markup=InlineKeyboardMarkup(buttons),
     )
 
 
 @admin.admin_only
 async def delete_event_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Runs when a numbered button is pressed. Deletes that event and replaces the list with a result."""
+    """Runs when an event button is pressed. Deletes that event and replaces the list with a result."""
     query = update.callback_query
     await query.answer()  # stops the button's loading spinner
     event_id = int(query.data.split(":")[1])
@@ -256,25 +196,10 @@ async def delete_event_button(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # ---------- /editevent ----------
 
-PART_NAMES = ("year", "month", "day")
-
-
 def _event_line(event):
     """'📌 Title\n📅 Monday, 27 October 2026' for result messages."""
     event_date = date.fromisoformat(event["date"])
     return f"📌 {event['title']}\n📅 {event_date.strftime('%A, %d %B %Y')}"
-
-
-def _part_buttons(exclude=None, with_done=False):
-    """Year/Month/Day buttons (minus the one just edited) and optionally a 'No change' button."""
-    row = [
-        InlineKeyboardButton(part.capitalize(), callback_data=f"editpart:{part}")
-        for part in PART_NAMES
-        if part != exclude
-    ]
-    if with_done:
-        row.append(InlineKeyboardButton("✅ No change", callback_data="editdone"))
-    return InlineKeyboardMarkup([row])
 
 
 @admin.admin_only
@@ -337,10 +262,10 @@ async def edit_field_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     event_date = date.fromisoformat(event["date"])
     await query.edit_message_text(
-        f"📅 Current date: {event_date.strftime('%A, %d %B %Y')}\n\nWhich part do you want to change?",
-        reply_markup=_part_buttons(),
+        f"📅 Current date: {event_date.isoformat()} ({event_date.strftime('%A')})\n\n"
+        "Send the new date in the format YYYY-MM-DD (or /cancel)."
     )
-    return E_CHOOSE_PART
+    return E_NEW_DATE
 
 
 async def edit_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -361,74 +286,27 @@ async def edit_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-async def edit_part_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Year / Month / Day button: ask for the new value."""
-    query = update.callback_query
-    await query.answer()
-    part = query.data.split(":")[1]
-    event = database.get_event(context.user_data["edit_event"])
-    if event is None:
-        await query.edit_message_text("⚠️ That event no longer exists.\nUse /help to see the commands.")
-        return ConversationHandler.END
-
-    context.user_data["edit_part"] = part
-    current = getattr(date.fromisoformat(event["date"]), part)
-    await query.edit_message_text(f"Send the new {part} (currently {current}), or /cancel.")
-    return E_NEW_VALUE
-
-
-async def edit_new_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """New year/month/day typed: validate it against the rest of the current date and save."""
-    event_id = context.user_data["edit_event"]
-    part = context.user_data["edit_part"]
-    event = database.get_event(event_id)
-    old_date = date.fromisoformat(event["date"])
-    value = _parse_int(update.message.text)
-
-    # 1) the part on its own
-    if part == "year":
-        error = _check_year(value)
-    elif part == "month":
-        error = _check_month(value)
-    else:
-        error = _check_day(old_date.year, old_date.month, value)
+async def edit_new_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """New date typed as YYYY-MM-DD: validate it and save."""
+    new_date, error = _parse_date(update.message.text)
     if error:
         await update.message.reply_text(error)
-        return E_NEW_VALUE
+        return E_NEW_DATE
 
-    # 2) the whole date it produces (e.g. changing month to 2 while the day is 30)
-    try:
-        new_date = old_date.replace(**{part: value})
-    except ValueError:
-        await update.message.reply_text(
-            f"That would make the date {old_date.day}/{value if part == 'month' else old_date.month}"
-            f"/{value if part == 'year' else old_date.year}, which doesn't exist. "
-            f"Change the day first, or pick another {part}."
-        )
-        return E_NEW_VALUE
-    if new_date < date.today():
-        await update.message.reply_text(
-            f"That would move the event to {new_date.isoformat()}, which has already passed. Try again."
-        )
-        return E_NEW_VALUE
+    event_id = context.user_data["edit_event"]
+    event = database.get_event(event_id)
+    if event is None:
+        await update.message.reply_text("⚠️ That event no longer exists.\nUse /help to see the commands.")
+        context.user_data.pop("edit_event", None)
+        return ConversationHandler.END
 
+    old_date = date.fromisoformat(event["date"])
     database.update_event_date(event_id, new_date.isoformat())
     logger.info("Event #%s date %s -> %s.", event_id, old_date, new_date)
     await update.message.reply_text(
-        f"✅ {part.capitalize()} updated!\n📅 New date: {new_date.strftime('%A, %d %B %Y')}"
-        "\n\nWant to change anything else?",
-        reply_markup=_part_buttons(exclude=part, with_done=True),
+        f"✅ Date updated!\n\n📌 {event['title']}\n📅 {old_date.isoformat()} → {new_date.isoformat()}"
+        "\n\nUse /help to see the commands."
     )
-    return E_CHOOSE_PART
-
-
-async def edit_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """'No change' button: finish."""
-    query = update.callback_query
-    await query.answer()
-    event = database.get_event(context.user_data.get("edit_event"))
-    summary = f"\n\n{_event_line(event)}" if event else ""
-    await query.edit_message_text(f"✅ Editing finished.{summary}\n\nUse /help to see the commands.")
     context.user_data.pop("edit_event", None)
     return ConversationHandler.END
 
@@ -565,9 +443,7 @@ def get_handlers():
         entry_points=[CommandHandler("addevent", add_event_start)],
         states={
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_name)],
-            YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_year)],
-            MONTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_month)],
-            DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_day)],
+            DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_date)],
         },
         fallbacks=[CommandHandler("cancel", add_event_cancel)],
         # Sending /addevent while a previous add-event is still waiting now cancels it and starts over.
@@ -581,12 +457,7 @@ def get_handlers():
             E_CHOOSE_EVENT: [CallbackQueryHandler(edit_event_chosen, pattern=r"^editevent:\d+$"), *buttons_only],
             E_CHOOSE_FIELD: [CallbackQueryHandler(edit_field_chosen, pattern=r"^editfield:(name|date)$"), *buttons_only],
             E_NEW_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_new_name)],
-            E_CHOOSE_PART: [
-                CallbackQueryHandler(edit_part_chosen, pattern=r"^editpart:(year|month|day)$"),
-                CallbackQueryHandler(edit_done, pattern=r"^editdone$"),
-                *buttons_only,
-            ],
-            E_NEW_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_new_value)],
+            E_NEW_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_new_date)],
         },
         fallbacks=[
             CommandHandler("cancel", edit_cancel),
@@ -597,10 +468,10 @@ def get_handlers():
     return [
         add_event_conversation,
         edit_event_conversation,
-        CallbackQueryHandler(edit_menu_expired, pattern=r"^edit(event|field|part|done)"),  # stale edit buttons
+        CallbackQueryHandler(edit_menu_expired, pattern=r"^edit(event|field)"),  # stale edit buttons
         CommandHandler("events", list_events),  # added: /events listing
         CommandHandler("deleteevent", delete_event_start),  # added: /deleteevent
         CommandHandler("sendreminder", send_reminder_command),  # added: /sendreminder
         CallbackQueryHandler(send_reminder_button, pattern=r"^remind:(\d+|all)$"),  # its buttons
-        CallbackQueryHandler(delete_event_button, pattern=r"^delevent:\d+$"),  # its numbered buttons
+        CallbackQueryHandler(delete_event_button, pattern=r"^delevent:\d+$"),  # its event buttons
     ]
