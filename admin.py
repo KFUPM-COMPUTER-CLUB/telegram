@@ -49,7 +49,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/addevent - Add a new event (Admin)\n"
         "/deleteevent - Delete an event (Admin)\n"
         "/editevent - Edit an event's name or date (Admin)\n"
-        "\nTo register a group, just add the bot to that group."
+        "/sendreminder - Remind all groups about an event now (Admin)\n"
+        "\nTo register a group, just add the bot to that group.\n"
+        "Groups get a reminder automatically the day before each event."
     )
 
 

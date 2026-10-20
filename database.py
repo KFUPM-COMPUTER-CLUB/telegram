@@ -50,6 +50,13 @@ def create_tables():
                 text TEXT NOT NULL,
                 send_time TEXT NOT NULL
             );
+            -- Added for event reminders: remembers which (event, date) already got a reminder,
+            -- so the bot never sends one twice, even after a restart.
+            CREATE TABLE IF NOT EXISTS reminders_sent (
+                event_id INTEGER NOT NULL,
+                event_date TEXT NOT NULL,
+                PRIMARY KEY (event_id, event_date)
+            );
             """
         )
         conn.commit()
@@ -115,6 +122,7 @@ def get_event(event_id):
 
 def delete_event(event_id):
     """Deletes the event with that id. Returns 1 if it existed, 0 if not."""
+    _run("DELETE FROM reminders_sent WHERE event_id = ?", (event_id,))  # added: tidy up reminder rows
     return _run("DELETE FROM events WHERE id = ?", (event_id,))
 
 
@@ -126,3 +134,24 @@ def update_event_title(event_id, title):
 def update_event_date(event_id, date):
     """date must be text 'YYYY-MM-DD'."""
     return _run("UPDATE events SET date = ? WHERE id = ?", (date, event_id))
+
+
+# Added for automatic reminders.
+def get_events_needing_reminder(dates):
+    """Events whose date is one of the given 'YYYY-MM-DD' strings and that haven't had a
+    reminder for that date yet. Editing an event's date makes it due again."""
+    placeholders = ",".join("?" * len(dates))
+    return _run(
+        f"SELECT * FROM events e WHERE e.date IN ({placeholders}) AND NOT EXISTS "
+        "(SELECT 1 FROM reminders_sent r WHERE r.event_id = e.id AND r.event_date = e.date) "
+        "ORDER BY e.date, e.id",
+        tuple(dates),
+        "all",
+    )
+
+
+def mark_reminder_sent(event_id, event_date):
+    _run(
+        "INSERT OR IGNORE INTO reminders_sent (event_id, event_date) VALUES (?, ?)",
+        (event_id, event_date),
+    )

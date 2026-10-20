@@ -1,9 +1,12 @@
-"""events.py - event commands: /addevent, /events, /deleteevent, /editevent (all listed in /help)."""
+"""events.py - event commands (/addevent, /events, /deleteevent, /editevent, /sendreminder)
+and the automatic day-before reminders sent to all registered groups."""
 import calendar
 import logging
-from datetime import date
+from datetime import date, time, timedelta
+from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import TelegramError
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -25,6 +28,9 @@ E_CHOOSE_EVENT, E_CHOOSE_FIELD, E_NEW_NAME, E_CHOOSE_PART, E_NEW_VALUE = range(1
 
 MAX_YEARS_AHEAD = 10  # rejects typos like 20260
 MAX_TITLE_LENGTH = 100
+
+# Automatic reminders go out at this local time, the day before each event.
+REMINDER_TIME = time(hour=9, minute=0, tzinfo=ZoneInfo("Asia/Riyadh"))
 
 
 def _parse_int(text):
@@ -454,6 +460,106 @@ async def edit_menu_expired(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.edit_message_text("⌛ This menu has expired. Send /editevent to start again.")
 
 
+# ---------- Reminders ----------
+
+async def _broadcast(bot, text):
+    """Sends text to every registered group. Returns (sent, failed) counts."""
+    sent = failed = 0
+    for group in database.get_groups():
+        try:
+            await bot.send_message(chat_id=group["group_id"], text=text)
+            sent += 1
+        except TelegramError as error:
+            failed += 1
+            logger.warning("Could not send to group %s (%s): %s", group["title"], group["group_id"], error)
+    return sent, failed
+
+
+def _reminder_text(event, today):
+    event_date = date.fromisoformat(event["date"])
+    when = "today" if event_date == today else "tomorrow"
+    return f"🔔 Reminder: {event['title']} is {when}!\n📅 {event_date.strftime('%A, %d %B %Y')}"
+
+
+async def send_due_reminders(context: ContextTypes.DEFAULT_TYPE):
+    """Job: reminds all groups about events happening tomorrow (or today, if the bot was
+    off yesterday). Each (event, date) is reminded once; reminders_sent remembers it."""
+    today = date.today()
+    due_dates = [today.isoformat(), (today + timedelta(days=1)).isoformat()]
+    for event in database.get_events_needing_reminder(due_dates):
+        sent, failed = await _broadcast(context.bot, _reminder_text(event, today))
+        if sent:  # if every send failed (or no groups yet), leave it due so it's retried
+            database.mark_reminder_sent(event["id"], event["date"])
+        logger.info("Reminder for event #%s '%s': sent to %s groups, %s failed.",
+                    event["id"], event["title"], sent, failed)
+
+
+def schedule_reminders(app):
+    """Call once from main.py after the Application is built."""
+    app.job_queue.run_daily(send_due_reminders, time=REMINDER_TIME, name="event_reminders")
+    # Also run shortly after every start, so a reminder missed while the bot was off still goes out.
+    app.job_queue.run_once(send_due_reminders, when=10, name="event_reminders_catchup")
+
+
+@admin.admin_only
+async def send_reminder_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/sendreminder - shows the upcoming list with a button per event (plus 'All events')."""
+    today = date.today()
+    events = database.get_upcoming_events(today.isoformat())
+    if not events:
+        await update.message.reply_text("📅 No upcoming events to send.\nUse /help to see the commands.")
+        return
+    if not database.get_groups():
+        await update.message.reply_text("No groups registered yet. Add the bot to a group first.")
+        return
+
+    # changed: pick one event (or all) instead of always sending the whole list
+    buttons = [
+        InlineKeyboardButton(str(i), callback_data=f"remind:{event['id']}")
+        for i, event in enumerate(events, start=1)
+    ]
+    rows = [buttons[i : i + BUTTONS_PER_ROW] for i in range(0, len(buttons), BUTTONS_PER_ROW)]
+    rows.append([InlineKeyboardButton("📋 All events", callback_data="remind:all")])
+    await update.message.reply_text(
+        _format_events(events, today) + "\n\n🔔 Tap the number of the event to remind all groups about:",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+
+
+@admin.admin_only
+async def send_reminder_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """A number (or 'All events') was pressed: broadcast that reminder and show the result."""
+    query = update.callback_query
+    await query.answer()
+    today = date.today()
+    choice = query.data.split(":")[1]
+
+    if choice == "all":
+        events = database.get_upcoming_events(today.isoformat())
+        if not events:
+            await query.edit_message_text("📅 No upcoming events to send.\nUse /help to see the commands.")
+            return
+        text = "🔔 " + _format_events(events, today)
+        what = f"the {len(events)} upcoming events"
+    else:
+        event = database.get_event(int(choice))
+        if event is None:
+            await query.edit_message_text("⚠️ That event no longer exists.\nUse /help to see the commands.")
+            return
+        event_date = date.fromisoformat(event["date"])
+        text = (
+            f"🔔 Reminder: {event['title']}\n"
+            f"📅 {event_date.strftime('%A, %d %B %Y')} · {_when(event_date, today)}"
+        )
+        what = f"“{event['title']}”"
+
+    sent, failed = await _broadcast(context.bot, text)
+    result = f"✅ Reminder about {what} sent to {sent} group(s)."
+    if failed:
+        result += f"\n⚠️ Could not send to {failed} group(s); see the bot log."
+    await query.edit_message_text(result + "\nUse /help to see the commands.")  # also removes the buttons
+
+
 def get_handlers():
     add_event_conversation = ConversationHandler(
         entry_points=[CommandHandler("addevent", add_event_start)],
@@ -494,5 +600,7 @@ def get_handlers():
         CallbackQueryHandler(edit_menu_expired, pattern=r"^edit(event|field|part|done)"),  # stale edit buttons
         CommandHandler("events", list_events),  # added: /events listing
         CommandHandler("deleteevent", delete_event_start),  # added: /deleteevent
+        CommandHandler("sendreminder", send_reminder_command),  # added: /sendreminder
+        CallbackQueryHandler(send_reminder_button, pattern=r"^remind:(\d+|all)$"),  # its buttons
         CallbackQueryHandler(delete_event_button, pattern=r"^delevent:\d+$"),  # its numbered buttons
     ]
