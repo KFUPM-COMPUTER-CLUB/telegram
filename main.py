@@ -29,6 +29,7 @@ def main():
         raise SystemExit("BOT_TOKEN is missing. Copy .env.example to .env and fill it in.")
 
     database.create_tables()
+    database.prepare_scheduled_messages()
     admin_ids = [int(x) for x in os.getenv("INITIAL_ADMIN_IDS", "").split(",") if x.strip().isdigit()]
     for admin_id in admin_ids:
         database.add_admin(admin_id)
@@ -40,7 +41,14 @@ def main():
         for handler in module.get_handlers():
             app.add_handler(handler)
 
-    events.schedule_reminders(app)  # events feature: starts the daily reminder job
+    events.schedule_reminders(app)  # Starts daily event reminders
+
+    app.job_queue.run_repeating(
+        announcements.process_scheduled_announcements,
+        interval=30,
+        first=10,
+        name="scheduled_announcements",
+    )
 
     app.add_error_handler(error_handler)
     logger.info("Bot is running. Press Ctrl+C to stop.")
