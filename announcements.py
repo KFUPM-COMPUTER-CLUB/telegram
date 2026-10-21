@@ -1,4 +1,3 @@
-
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -53,7 +52,9 @@ def command_content(message):
     if not content:
         return ""
 
-    return content.partition(" ")[2].strip()
+    # Split on any whitespace (space OR newline) so "/announce\nHello" works too.
+    parts = content.split(maxsplit=1)
+    return parts[1].strip() if len(parts) > 1 else ""
 
 
 def extract_media(message):
@@ -406,20 +407,20 @@ def get_handlers():
         CommandHandler("edit_announce", edit_announce),
         CommandHandler("cancel_announce", cancel_announce),
         MessageHandler(
-            filters.PHOTO & filters.CAPTION_REGEX(
+            filters.PHOTO & filters.CaptionRegex(
                 re.compile(r"^/announce(?:@\w+)?(?:\s|$)")
             ),
             announce,
         ),
         MessageHandler(
-            filters.VIDEO & filters.CAPTION_REGEX(
+            filters.VIDEO & filters.CaptionRegex(
                 re.compile(r"^/announce(?:@\w+)?(?:\s|$)")
             ),
             announce,
         ),
         MessageHandler(
             (filters.PHOTO | filters.VIDEO)
-            & filters.CAPTION_REGEX(
+            & filters.CaptionRegex(
                 re.compile(r"^/schedule_announce(?:@\w+)?(?:\s|$)")
             ),
             schedule_announce,

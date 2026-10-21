@@ -218,6 +218,9 @@ def finish_scheduled_message(message_id, status):
         WHERE id = ? AND status = 'sending'
         """,
         (status, message_id),
+    )
+
+
 # ---------- Events ----------
 # Added for the add-event feature (events.py): saves a new event row.
 

@@ -2,7 +2,7 @@
 and the automatic day-before reminders sent to all registered groups."""
 import logging
 import re
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -30,8 +30,16 @@ MAX_YEARS_AHEAD = 10  # rejects typos like 20260
 MAX_TITLE_LENGTH = 100
 BUTTONS_PER_ROW = 5
 
+SAUDI_TZ = ZoneInfo("Asia/Riyadh")
+
 # Automatic reminders go out at this local time, the day before each event.
-REMINDER_TIME = time(hour=9, minute=0, tzinfo=ZoneInfo("Asia/Riyadh"))
+REMINDER_TIME = time(hour=9, minute=0, tzinfo=SAUDI_TZ)
+
+
+def _today():
+    """Today's date in Saudi time, whatever timezone the computer running the bot uses.
+    (date.today() would use the server's own timezone, which can be a day behind after midnight.)"""
+    return datetime.now(SAUDI_TZ).date()
 
 
 # Validation rules shared by /addevent and /editevent.
@@ -48,7 +56,7 @@ def _check_title(title):
 def _parse_date(text):
     """Checks a date typed as YYYY-MM-DD. Returns (date, None) if it's valid, or (None, error message)."""
     text = text.strip()
-    today = date.today()
+    today = _today()
     # Exactly a 4-digit year, 2-digit month and 2-digit day (so '2026-1-5' or '5/1/2026' are rejected).
     if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", text):
         return None, f"Please send the date in the format YYYY-MM-DD, e.g. {today.isoformat()}."
@@ -100,7 +108,7 @@ async def add_event_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["new_event"]["title"] = title
     await update.message.reply_text(
-        f"Got it: “{title}”.\nNow send the date in the format YYYY-MM-DD (e.g. {date.today().isoformat()}),"
+        f"Got it: “{title}”.\nNow send the date in the format YYYY-MM-DD (e.g. {_today().isoformat()}),"
         " or /cancel to stop."  # changed: the date step now also offers /cancel
     )
     return DATE
@@ -197,7 +205,7 @@ def _numbered_buttons(events, prefix):
 async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/events - shows upcoming events, soonest first, with a button per event to see its
     full info (poster, title, date). Open to everyone."""
-    today = date.today()
+    today = _today()
     events = database.get_upcoming_events(today.isoformat())
     if not events:
         await update.message.reply_text("📅 No upcoming events yet.\nUse /help to see the commands.")
@@ -216,7 +224,7 @@ async def view_event_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if event is None:
         await query.message.reply_text("⚠️ That event no longer exists. Send /events for the current list.")
         return
-    text = _event_text(event, date.today())
+    text = _event_text(event, _today())
     if not event.get("poster"):
         text += "\n🖼 No poster yet."
     await _send_event(context.bot, query.message.chat_id, text, event)
@@ -227,7 +235,7 @@ async def view_event_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @admin.admin_only
 async def delete_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/deleteevent - shows one button per upcoming event, labelled with the event's name."""
-    events = database.get_upcoming_events(date.today().isoformat())
+    events = database.get_upcoming_events(_today().isoformat())
     if not events:
         await update.message.reply_text("📅 No upcoming events to delete.\nUse /help to see the commands.")
         return
@@ -311,7 +319,7 @@ async def _ask_more_changes(update, context, event, changed, result):
 @admin.admin_only
 async def edit_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/editevent - shows the upcoming list with one numbered button per event."""
-    today = date.today()
+    today = _today()
     events = database.get_upcoming_events(today.isoformat())
     if not events:
         await update.message.reply_text("📅 No upcoming events to edit.\nUse /help to see the commands.")
@@ -501,7 +509,7 @@ def _reminder_text(event, today):
 async def send_due_reminders(context: ContextTypes.DEFAULT_TYPE):
     """Job: reminds all groups about events happening tomorrow (or today, if the bot was
     off yesterday). Each (event, date) is reminded once; reminders_sent remembers it."""
-    today = date.today()
+    today = _today()
     due_dates = [today.isoformat(), (today + timedelta(days=1)).isoformat()]
     for event in database.get_events_needing_reminder(due_dates):
         sent, failed = await _broadcast(context.bot, _reminder_text(event, today), event)
@@ -521,7 +529,7 @@ def schedule_reminders(app):
 @admin.admin_only
 async def send_reminder_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/sendreminder - shows the upcoming list with a button per event (plus 'All events')."""
-    today = date.today()
+    today = _today()
     events = database.get_upcoming_events(today.isoformat())
     if not events:
         await update.message.reply_text("📅 No upcoming events to send.\nUse /help to see the commands.")
@@ -543,7 +551,7 @@ async def send_reminder_button(update: Update, context: ContextTypes.DEFAULT_TYP
     """A number (or 'All events') was pressed: broadcast that reminder and show the result."""
     query = update.callback_query
     await query.answer()
-    today = date.today()
+    today = _today()
     choice = query.data.split(":")[1]
 
     # changed: every reminder now carries the event's full info (poster, title, date).
