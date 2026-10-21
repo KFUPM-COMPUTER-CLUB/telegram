@@ -35,7 +35,8 @@ def create_tables():
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
-                date TEXT NOT NULL
+                date TEXT NOT NULL,
+                poster TEXT
             );
             CREATE TABLE IF NOT EXISTS telegram_groups (
                 group_id INTEGER PRIMARY KEY,
@@ -50,8 +51,20 @@ def create_tables():
                 text TEXT NOT NULL,
                 send_time TEXT NOT NULL
             );
+            -- Added for event reminders: remembers which (event, date) already got a reminder,
+            -- so the bot never sends one twice, even after a restart.
+            CREATE TABLE IF NOT EXISTS reminders_sent (
+                event_id INTEGER NOT NULL,
+                event_date TEXT NOT NULL,
+                PRIMARY KEY (event_id, event_date)
+            );
             """
         )
+        # Added for posters: older databases were created without the poster column, so add it.
+        # (poster holds the Telegram file_id of the photo; NULL means the event has no poster.)
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(events)")]
+        if "poster" not in columns:
+            conn.execute("ALTER TABLE events ADD COLUMN poster TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -205,4 +218,64 @@ def finish_scheduled_message(message_id, status):
         WHERE id = ? AND status = 'sending'
         """,
         (status, message_id),
+# ---------- Events ----------
+# Added for the add-event feature (events.py): saves a new event row.
+
+def add_event(title, date, poster=None):
+    """Saves an event. date must be text 'YYYY-MM-DD'; poster is the photo's Telegram file_id
+    or None. Returns the new event id."""  # changed: poster added
+    return _run("INSERT INTO events (title, date, poster) VALUES (?, ?, ?)", (title, date, poster), "id")
+
+
+# Added for /events: lists events that haven't passed yet.
+def get_upcoming_events(today):
+    """Events dated today or later, soonest first. today must be text 'YYYY-MM-DD'."""
+    return _run("SELECT * FROM events WHERE date >= ? ORDER BY date, id", (today,), "all")
+
+
+# Added for /deleteevent: looks up one event (for the success message) and removes it.
+def get_event(event_id):
+    """One event as a dict, or None if that id doesn't exist."""
+    return _run("SELECT * FROM events WHERE id = ?", (event_id,), "one")
+
+
+def delete_event(event_id):
+    """Deletes the event with that id. Returns 1 if it existed, 0 if not."""
+    _run("DELETE FROM reminders_sent WHERE event_id = ?", (event_id,))  # added: tidy up reminder rows
+    return _run("DELETE FROM events WHERE id = ?", (event_id,))
+
+
+# Added for /editevent: change one field of an existing event.
+def update_event_title(event_id, title):
+    return _run("UPDATE events SET title = ? WHERE id = ?", (title, event_id))
+
+
+def update_event_date(event_id, date):
+    """date must be text 'YYYY-MM-DD'."""
+    return _run("UPDATE events SET date = ? WHERE id = ?", (date, event_id))
+
+
+def update_event_poster(event_id, poster):
+    """poster is the photo's Telegram file_id."""  # added for /editevent -> Poster
+    return _run("UPDATE events SET poster = ? WHERE id = ?", (poster, event_id))
+
+
+# Added for automatic reminders.
+def get_events_needing_reminder(dates):
+    """Events whose date is one of the given 'YYYY-MM-DD' strings and that haven't had a
+    reminder for that date yet. Editing an event's date makes it due again."""
+    placeholders = ",".join("?" * len(dates))
+    return _run(
+        f"SELECT * FROM events e WHERE e.date IN ({placeholders}) AND NOT EXISTS "
+        "(SELECT 1 FROM reminders_sent r WHERE r.event_id = e.id AND r.event_date = e.date) "
+        "ORDER BY e.date, e.id",
+        tuple(dates),
+        "all",
+    )
+
+
+def mark_reminder_sent(event_id, event_date):
+    _run(
+        "INSERT OR IGNORE INTO reminders_sent (event_id, event_date) VALUES (?, ?)",
+        (event_id, event_date),
     )

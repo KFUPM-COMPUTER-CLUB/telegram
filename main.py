@@ -40,6 +40,8 @@ def main():
         for handler in module.get_handlers():
             app.add_handler(handler)
 
+    events.schedule_reminders(app)  # events feature: starts the daily reminder job
+
     app.add_error_handler(error_handler)
     logger.info("Bot is running. Press Ctrl+C to stop.")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
