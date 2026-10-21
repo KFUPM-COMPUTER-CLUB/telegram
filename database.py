@@ -92,3 +92,117 @@ def unregister_group(group_id):
 def get_groups():
     """All registered groups, as a list of dicts with 'group_id' and 'title'."""
     return _run("SELECT * FROM telegram_groups ORDER BY title, group_id", fetch="all")
+
+
+
+# ---------- Scheduled announcements ----------
+
+def prepare_scheduled_messages():
+    """Upgrade the existing scheduled_messages table safely."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(scheduled_messages)"
+            )
+        }
+
+        additions = {
+            "media_type": "TEXT",
+            "media_file_id": "TEXT",
+            "status": "TEXT NOT NULL DEFAULT 'pending'",
+        }
+
+        for name, definition in additions.items():
+            if name not in columns:
+                conn.execute(
+                    f"ALTER TABLE scheduled_messages "
+                    f"ADD COLUMN {name} {definition}"
+                )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def add_scheduled_message(text, send_time, media_type=None, media_file_id=None):
+    return _run(
+        """
+        INSERT INTO scheduled_messages
+        (text, send_time, media_type, media_file_id, status)
+        VALUES (?, ?, ?, ?, 'pending')
+        """,
+        (text, send_time, media_type, media_file_id),
+        fetch="id",
+    )
+
+
+def get_scheduled_messages():
+    return _run(
+        """
+        SELECT * FROM scheduled_messages
+        WHERE status = 'pending'
+        ORDER BY send_time
+        """,
+        fetch="all",
+    )
+
+
+def get_due_messages(now):
+    return _run(
+        """
+        SELECT * FROM scheduled_messages
+        WHERE status = 'pending' AND send_time <= ?
+        ORDER BY send_time
+        """,
+        (now,),
+        fetch="all",
+    )
+
+
+def claim_scheduled_message(message_id):
+    return _run(
+        """
+        UPDATE scheduled_messages
+        SET status = 'sending'
+        WHERE id = ? AND status = 'pending'
+        """,
+        (message_id,),
+    ) == 1
+
+
+def edit_scheduled_message(message_id, text, send_time):
+    return _run(
+        """
+        UPDATE scheduled_messages
+        SET text = ?, send_time = ?
+        WHERE id = ? AND status = 'pending'
+        """,
+        (text, send_time, message_id),
+    )
+
+
+def cancel_scheduled_message(message_id):
+    return _run(
+        """
+        UPDATE scheduled_messages
+        SET status = 'cancelled'
+        WHERE id = ? AND status = 'pending'
+        """,
+        (message_id,),
+    )
+
+
+def finish_scheduled_message(message_id, status):
+    if status not in ("sent", "failed"):
+        raise ValueError("Invalid scheduled message status")
+
+    return _run(
+        """
+        UPDATE scheduled_messages
+        SET status = ?
+        WHERE id = ? AND status = 'sending'
+        """,
+        (status, message_id),
+    )
