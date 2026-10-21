@@ -40,7 +40,7 @@ ADMIN_HELP = (
     "🔧 Admin commands\n"
     "\n📅 Events\n"
     "/addevent - add a new event\n"
-    "/editevent - edit an event's name or date\n"
+    "/editevent - edit an event's name, date or poster\n"
     "/deleteevent - delete an event\n"
     "/sendreminder - remind all groups about an event now\n"
     "Groups also get an automatic reminder the day before each event.\n"

@@ -35,7 +35,8 @@ def create_tables():
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
-                date TEXT NOT NULL
+                date TEXT NOT NULL,
+                poster TEXT
             );
             CREATE TABLE IF NOT EXISTS telegram_groups (
                 group_id INTEGER PRIMARY KEY,
@@ -59,6 +60,11 @@ def create_tables():
             );
             """
         )
+        # Added for posters: older databases were created without the poster column, so add it.
+        # (poster holds the Telegram file_id of the photo; NULL means the event has no poster.)
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(events)")]
+        if "poster" not in columns:
+            conn.execute("ALTER TABLE events ADD COLUMN poster TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -103,9 +109,10 @@ def get_groups():
 # ---------- Events ----------
 # Added for the add-event feature (events.py): saves a new event row.
 
-def add_event(title, date):
-    """Saves an event. date must be text in the form 'YYYY-MM-DD'. Returns the new event id."""
-    return _run("INSERT INTO events (title, date) VALUES (?, ?)", (title, date), "id")
+def add_event(title, date, poster=None):
+    """Saves an event. date must be text 'YYYY-MM-DD'; poster is the photo's Telegram file_id
+    or None. Returns the new event id."""  # changed: poster added
+    return _run("INSERT INTO events (title, date, poster) VALUES (?, ?, ?)", (title, date, poster), "id")
 
 
 # Added for /events: lists events that haven't passed yet.
@@ -134,6 +141,11 @@ def update_event_title(event_id, title):
 def update_event_date(event_id, date):
     """date must be text 'YYYY-MM-DD'."""
     return _run("UPDATE events SET date = ? WHERE id = ?", (date, event_id))
+
+
+def update_event_poster(event_id, poster):
+    """poster is the photo's Telegram file_id."""  # added for /editevent -> Poster
+    return _run("UPDATE events SET poster = ? WHERE id = ?", (poster, event_id))
 
 
 # Added for automatic reminders.
