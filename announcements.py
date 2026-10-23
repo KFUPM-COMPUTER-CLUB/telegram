@@ -13,6 +13,7 @@ from telegram.ext import (
 
 import database
 from admin import admin_only
+from buttons import reply_long, with_website
 
 logger = logging.getLogger(__name__)
 
@@ -137,9 +138,7 @@ async def reply_report(message, successful, failed):
     if failed:
         result += "\n\nFailures:\n" + "\n".join(failed)
 
-    while result:
-        await message.reply_text(result[:4096])
-        result = result[4096:]
+    await reply_long(message, result)
 
 
 @admin_only
@@ -151,11 +150,11 @@ async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         validate_content(text, media_type)
     except ValueError as error:
-        await message.reply_text(str(error))
+        await message.reply_text(str(error), reply_markup=with_website())
         return
 
     if not database.get_groups():
-        await message.reply_text("No registered groups found.")
+        await message.reply_text("No registered groups found.", reply_markup=with_website())
         return
 
     successful, failed = await send_to_groups(
@@ -182,7 +181,8 @@ async def schedule_announce(
             "Usage:\n"
             "/schedule_announce YYYY-MM-DD HH:MM message\n\n"
             "Example:\n"
-            "/schedule_announce 2026-11-01 17:00 Meeting tomorrow!"
+            "/schedule_announce 2026-11-01 17:00 Meeting tomorrow!",
+            reply_markup=with_website(),
         )
         return
 
@@ -194,7 +194,7 @@ async def schedule_announce(
         send_time = parse_date(date_text)
         validate_content(text, media_type)
     except ValueError as error:
-        await message.reply_text(str(error))
+        await message.reply_text(str(error), reply_markup=with_website())
         return
 
     message_id = database.add_scheduled_message(
@@ -207,7 +207,8 @@ async def schedule_announce(
     await message.reply_text(
         f"Announcement scheduled!\n"
         f"ID: {message_id}\n"
-        f"Date: {display_date(send_time)} (Saudi time)"
+        f"Date: {display_date(send_time)} (Saudi time)",
+        reply_markup=with_website(),
     )
 
 
@@ -220,7 +221,8 @@ async def scheduled(
 
     if not messages:
         await update.effective_message.reply_text(
-            "No pending announcements."
+            "No pending announcements.",
+            reply_markup=with_website(),
         )
         return
 
@@ -237,9 +239,7 @@ async def scheduled(
 
     result = "\n".join(lines)
 
-    while result:
-        await update.effective_message.reply_text(result[:4096])
-        result = result[4096:]
+    await reply_long(update.effective_message, result)
 
 
 @admin_only
@@ -253,7 +253,8 @@ async def edit_announce(
     if len(parts) != 4 or not parts[0].isdigit():
         await message.reply_text(
             "Usage:\n"
-            "/edit_announce ID YYYY-MM-DD HH:MM new text"
+            "/edit_announce ID YYYY-MM-DD HH:MM new text",
+            reply_markup=with_website(),
         )
         return
 
@@ -274,14 +275,15 @@ async def edit_announce(
 
         if pending is None:
             await message.reply_text(
-                "Announcement not found or no longer editable."
+                "Announcement not found or no longer editable.",
+                reply_markup=with_website(),
             )
             return
 
         validate_content(new_text, pending["media_type"])
 
     except ValueError as error:
-        await message.reply_text(str(error))
+        await message.reply_text(str(error), reply_markup=with_website())
         return
 
     changed = database.edit_scheduled_message(
@@ -291,10 +293,11 @@ async def edit_announce(
     )
 
     if changed:
-        await message.reply_text("Announcement updated!")
+        await message.reply_text("Announcement updated!", reply_markup=with_website())
     else:
         await message.reply_text(
-            "Announcement not found or no longer editable."
+            "Announcement not found or no longer editable.",
+            reply_markup=with_website(),
         )
 
 
@@ -308,7 +311,8 @@ async def cancel_announce(
 
     if len(parts) != 1 or not parts[0].isdigit():
         await message.reply_text(
-            "Usage: /cancel_announce ID"
+            "Usage: /cancel_announce ID",
+            reply_markup=with_website(),
         )
         return
 
@@ -316,10 +320,11 @@ async def cancel_announce(
     cancelled = database.cancel_scheduled_message(message_id)
 
     if cancelled:
-        await message.reply_text("Announcement cancelled!")
+        await message.reply_text("Announcement cancelled!", reply_markup=with_website())
     else:
         await message.reply_text(
-            "Announcement not found or already processed."
+            "Announcement not found or already processed.",
+            reply_markup=with_website(),
         )
 
 

@@ -18,6 +18,7 @@ from telegram.ext import (
 
 import admin
 import database
+from buttons import with_website
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,8 @@ async def add_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point: the /addevent command."""
     context.user_data["new_event"] = {}  # per-user scratch space for the answers
     await update.message.reply_text(
-        "📝 Let's add an event.\nSend me the event name (or /cancel to stop)."
+        "📝 Let's add an event.\nSend me the event name (or /cancel to stop).",
+        reply_markup=with_website(),
     )
     return NAME
 
@@ -103,13 +105,14 @@ async def add_event_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     title = update.message.text.strip()
     error = _check_title(title)
     if error:
-        await update.message.reply_text(error)
+        await update.message.reply_text(error, reply_markup=with_website())
         return NAME
 
     context.user_data["new_event"]["title"] = title
     await update.message.reply_text(
         f"Got it: “{title}”.\nNow send the date in the format YYYY-MM-DD (e.g. {_today().isoformat()}),"
-        " or /cancel to stop."  # changed: the date step now also offers /cancel
+        " or /cancel to stop.",  # changed: the date step now also offers /cancel
+        reply_markup=with_website(),
     )
     return DATE
 
@@ -117,14 +120,15 @@ async def add_event_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_event_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     event_date, error = _parse_date(update.message.text)
     if error:
-        await update.message.reply_text(error)
+        await update.message.reply_text(error, reply_markup=with_website())
         return DATE
 
     # changed: the date is kept until the poster step; saving happens in _save_new_event
     context.user_data["new_event"]["date"] = event_date.isoformat()
     await update.message.reply_text(
         "🖼 Now send the event poster as a photo (not as a file).\n"
-        "Send /skip if there is no poster, or /cancel to stop."
+        "Send /skip if there is no poster, or /cancel to stop.",
+        reply_markup=with_website(),
     )
     return POSTER
 
@@ -142,7 +146,7 @@ async def add_event_skip_poster(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def add_event_not_a_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Please send the poster as a photo, or /skip if there is none.")
+    await update.message.reply_text("Please send the poster as a photo, or /skip if there is none.", reply_markup=with_website())
     return POSTER
 
 
@@ -158,6 +162,7 @@ async def _save_new_event(update, context):
         context.bot, update.effective_chat.id,
         f"✅ Event registered!\n\n{_event_text(event)}\n\nUse /help to see the commands.",
         event,
+        reply_markup=with_website(),
     )
     return ConversationHandler.END
 
@@ -165,7 +170,7 @@ async def _save_new_event(update, context):
 async def add_event_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/cancel at any step leaves the conversation without saving."""
     context.user_data.pop("new_event", None)
-    await update.message.reply_text("❌ Cancelled. Nothing was saved.\nUse /help to see the commands.")
+    await update.message.reply_text("❌ Cancelled. Nothing was saved.\nUse /help to see the commands.", reply_markup=with_website())
     return ConversationHandler.END
 
 
@@ -208,11 +213,11 @@ async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = _today()
     events = database.get_upcoming_events(today.isoformat())
     if not events:
-        await update.message.reply_text("📅 No upcoming events yet.\nUse /help to see the commands.")
+        await update.message.reply_text("📅 No upcoming events yet.\nUse /help to see the commands.", reply_markup=with_website())
         return
     await update.message.reply_text(  # changed: numbered buttons added
         _format_events(events, today) + "\n\n👀 Tap a number to see the full event info:",
-        reply_markup=InlineKeyboardMarkup(_numbered_buttons(events, "viewevent")),
+        reply_markup=with_website(InlineKeyboardMarkup(_numbered_buttons(events, "viewevent"))),
     )
 
 
@@ -222,12 +227,12 @@ async def view_event_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     event = database.get_event(int(query.data.split(":")[1]))
     if event is None:
-        await query.message.reply_text("⚠️ That event no longer exists. Send /events for the current list.")
+        await query.message.reply_text("⚠️ That event no longer exists. Send /events for the current list.", reply_markup=with_website())
         return
     text = _event_text(event, _today())
     if not event.get("poster"):
         text += "\n🖼 No poster yet."
-    await _send_event(context.bot, query.message.chat_id, text, event)
+    await _send_event(context.bot, query.message.chat_id, text, event, reply_markup=with_website())
 
 
 # ---------- /deleteevent ----------
@@ -237,7 +242,7 @@ async def delete_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """/deleteevent - shows one button per upcoming event, labelled with the event's name."""
     events = database.get_upcoming_events(_today().isoformat())
     if not events:
-        await update.message.reply_text("📅 No upcoming events to delete.\nUse /help to see the commands.")
+        await update.message.reply_text("📅 No upcoming events to delete.\nUse /help to see the commands.", reply_markup=with_website())
         return
 
     # Each button's callback_data carries the event id, e.g. "delevent:7", so the press
@@ -248,7 +253,7 @@ async def delete_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ]
     await update.message.reply_text(
         "🗑 Tap the event you want to delete:",
-        reply_markup=InlineKeyboardMarkup(buttons),
+        reply_markup=with_website(InlineKeyboardMarkup(buttons)),
     )
 
 
@@ -261,14 +266,15 @@ async def delete_event_button(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     event = database.get_event(event_id)
     if event is None or database.delete_event(event_id) == 0:
-        await query.edit_message_text("⚠️ That event was already deleted.\nUse /help to see the commands.")
+        await query.edit_message_text("⚠️ That event was already deleted.\nUse /help to see the commands.", reply_markup=with_website())
         return
 
     logger.info("Event #%s '%s' deleted.", event_id, event["title"])
     event_date = date.fromisoformat(event["date"])
     await query.edit_message_text(  # editing also removes the buttons
         f"🗑 Event deleted!\n\n📌 {event['title']}\n📅 {event_date.strftime('%A, %d %B %Y')}"
-        "\n\nUse /help to see the commands."
+        "\n\nUse /help to see the commands.",
+        reply_markup=with_website(),
     )
 
 
@@ -297,7 +303,8 @@ def _field_buttons(exclude=None, with_done=False):
 
 async def _show(query, text, reply_markup=None):
     """Replaces the message the button was on. A photo message can't become text, so there the
-    buttons are removed and a new message is sent instead."""  # added
+    buttons are removed and a new message is sent instead. The website button is always added."""  # added
+    reply_markup = with_website(reply_markup)
     if query.message.photo:
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(text, reply_markup=reply_markup)
@@ -311,7 +318,7 @@ async def _ask_more_changes(update, context, event, changed, result):
         context.bot, update.effective_chat.id,
         f"{result}\n\nWant to change anything else? (or /cancel)",
         event,
-        reply_markup=_field_buttons(exclude=changed, with_done=True),
+        reply_markup=with_website(_field_buttons(exclude=changed, with_done=True)),
     )
     return E_CHOOSE_FIELD
 
@@ -322,13 +329,13 @@ async def edit_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = _today()
     events = database.get_upcoming_events(today.isoformat())
     if not events:
-        await update.message.reply_text("📅 No upcoming events to edit.\nUse /help to see the commands.")
+        await update.message.reply_text("📅 No upcoming events to edit.\nUse /help to see the commands.", reply_markup=with_website())
         return ConversationHandler.END
 
     context.user_data.pop("edit_event", None)
     await update.message.reply_text(
         _format_events(events, today) + "\n\n✏️ Tap the number of the event to edit (or /cancel):",
-        reply_markup=InlineKeyboardMarkup(_numbered_buttons(events, "editevent")),
+        reply_markup=with_website(InlineKeyboardMarkup(_numbered_buttons(events, "editevent"))),
     )
     return E_CHOOSE_EVENT
 
@@ -340,13 +347,13 @@ async def edit_event_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     event_id = int(query.data.split(":")[1])
     event = database.get_event(event_id)
     if event is None:
-        await query.edit_message_text("⚠️ That event no longer exists.\nUse /help to see the commands.")
+        await query.edit_message_text("⚠️ That event no longer exists.\nUse /help to see the commands.", reply_markup=with_website())
         return ConversationHandler.END
 
     context.user_data["edit_event"] = event_id
     await query.edit_message_text(
         f"✏️ Editing:\n{_event_line(event)}\n\nWhat do you want to change? (or /cancel)",
-        reply_markup=_field_buttons(),
+        reply_markup=with_website(_field_buttons()),
     )
     return E_CHOOSE_FIELD
 
@@ -384,13 +391,13 @@ async def edit_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     title = update.message.text.strip()
     error = _check_title(title)
     if error:
-        await update.message.reply_text(error)
+        await update.message.reply_text(error, reply_markup=with_website())
         return E_NEW_NAME
 
     event_id = context.user_data["edit_event"]
     event = database.get_event(event_id)
     if event is None:
-        await update.message.reply_text("⚠️ That event no longer exists.\nUse /help to see the commands.")
+        await update.message.reply_text("⚠️ That event no longer exists.\nUse /help to see the commands.", reply_markup=with_website())
         context.user_data.pop("edit_event", None)
         return ConversationHandler.END
 
@@ -406,13 +413,13 @@ async def edit_new_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """New date typed as YYYY-MM-DD: validate it and save."""
     new_date, error = _parse_date(update.message.text)
     if error:
-        await update.message.reply_text(error)
+        await update.message.reply_text(error, reply_markup=with_website())
         return E_NEW_DATE
 
     event_id = context.user_data["edit_event"]
     event = database.get_event(event_id)
     if event is None:
-        await update.message.reply_text("⚠️ That event no longer exists.\nUse /help to see the commands.")
+        await update.message.reply_text("⚠️ That event no longer exists.\nUse /help to see the commands.", reply_markup=with_website())
         context.user_data.pop("edit_event", None)
         return ConversationHandler.END
 
@@ -430,7 +437,7 @@ async def edit_new_poster(update: Update, context: ContextTypes.DEFAULT_TYPE):
     event_id = context.user_data["edit_event"]
     event = database.get_event(event_id)
     if event is None:
-        await update.message.reply_text("⚠️ That event no longer exists.\nUse /help to see the commands.")
+        await update.message.reply_text("⚠️ That event no longer exists.\nUse /help to see the commands.", reply_markup=with_website())
         context.user_data.pop("edit_event", None)
         return ConversationHandler.END
 
@@ -442,7 +449,7 @@ async def edit_new_poster(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def edit_not_a_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Please send the poster as a photo, or /cancel.")
+    await update.message.reply_text("Please send the poster as a photo, or /cancel.", reply_markup=with_website())
     return E_NEW_POSTER
 
 
@@ -459,13 +466,13 @@ async def edit_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def edit_tap_a_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Text typed while the bot is waiting for a button press."""
-    await update.message.reply_text("Please tap one of the buttons above, or send /cancel.")
+    await update.message.reply_text("Please tap one of the buttons above, or send /cancel.", reply_markup=with_website())
     return None  # stay on the same step
 
 
 async def edit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("edit_event", None)
-    await update.message.reply_text("❌ Edit cancelled. Changes already saved are kept.\nUse /help to see the commands.")
+    await update.message.reply_text("❌ Edit cancelled. Changes already saved are kept.\nUse /help to see the commands.", reply_markup=with_website())
     return ConversationHandler.END
 
 
@@ -532,17 +539,17 @@ async def send_reminder_command(update: Update, context: ContextTypes.DEFAULT_TY
     today = _today()
     events = database.get_upcoming_events(today.isoformat())
     if not events:
-        await update.message.reply_text("📅 No upcoming events to send.\nUse /help to see the commands.")
+        await update.message.reply_text("📅 No upcoming events to send.\nUse /help to see the commands.", reply_markup=with_website())
         return
     if not database.get_groups():
-        await update.message.reply_text("No groups registered yet. Add the bot to a group first.")
+        await update.message.reply_text("No groups registered yet. Add the bot to a group first.", reply_markup=with_website())
         return
 
     rows = _numbered_buttons(events, "remind")
     rows.append([InlineKeyboardButton("📋 All events", callback_data="remind:all")])
     await update.message.reply_text(
         _format_events(events, today) + "\n\n🔔 Tap the number of the event to remind all groups about:",
-        reply_markup=InlineKeyboardMarkup(rows),
+        reply_markup=with_website(InlineKeyboardMarkup(rows)),
     )
 
 
@@ -559,13 +566,13 @@ async def send_reminder_button(update: Update, context: ContextTypes.DEFAULT_TYP
     if choice == "all":
         events = database.get_upcoming_events(today.isoformat())
         if not events:
-            await query.edit_message_text("📅 No upcoming events to send.\nUse /help to see the commands.")
+            await query.edit_message_text("📅 No upcoming events to send.\nUse /help to see the commands.", reply_markup=with_website())
             return
         what = f"the {len(events)} upcoming events"
     else:
         event = database.get_event(int(choice))
         if event is None:
-            await query.edit_message_text("⚠️ That event no longer exists.\nUse /help to see the commands.")
+            await query.edit_message_text("⚠️ That event no longer exists.\nUse /help to see the commands.", reply_markup=with_website())
             return
         events = [event]
         what = f"“{event['title']}”"
@@ -577,7 +584,7 @@ async def send_reminder_button(update: Update, context: ContextTypes.DEFAULT_TYP
     result = f"✅ Reminder about {what} sent to {sent} group(s)."
     if failed:
         result += f"\n⚠️ Could not send to {failed} group(s); see the bot log."
-    await query.edit_message_text(result + "\nUse /help to see the commands.")  # also removes the buttons
+    await query.edit_message_text(result + "\nUse /help to see the commands.", reply_markup=with_website())  # replaces the number buttons with just the website button
 
 
 def get_handlers():

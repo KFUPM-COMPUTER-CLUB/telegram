@@ -7,6 +7,7 @@ from telegram.constants import ChatMemberStatus
 from telegram.ext import ChatMemberHandler, CommandHandler, ContextTypes
 
 import database
+from buttons import with_website
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ def admin_only(func):
             # events feature: answer button presses so the spinner stops for non-admins
             if update.callback_query:
                 await update.callback_query.answer()
-            await update.effective_message.reply_text("⛔ This command is for administrators only.")
+            await update.effective_message.reply_text("⛔ This command is for administrators only.", reply_markup=with_website())
             return None
         return await func(update, context, *args, **kwargs)
 
@@ -67,13 +68,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user is not None and database.is_admin(user.id):
         text += "\n\n🔧 You're an admin: send /adminhelp to see your commands."
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, reply_markup=with_website())
 
 
 @admin_only
 async def admin_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/adminhelp - admins only. Lists the admin commands."""
-    await update.message.reply_text(ADMIN_HELP)
+    await update.message.reply_text(ADMIN_HELP, reply_markup=with_website())
 
 
 async def track_bot_membership(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -102,7 +103,7 @@ async def track_bot_membership(update: Update, context: ContextTypes.DEFAULT_TYP
 async def list_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     groups = database.get_groups()
     if not groups:
-        await update.message.reply_text("No groups registered yet.")
+        await update.message.reply_text("No groups registered yet.", reply_markup=with_website())
         return
 
     lines = [f"{i}. {g['title'] or g['group_id']}" for i, g in enumerate(groups, start=1)]
@@ -114,29 +115,29 @@ async def list_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message = line
         else:
             message += "\n" + line
-    await update.message.reply_text(message)
+    await update.message.reply_text(message, reply_markup=with_website())
 
 
 @admin_only
 async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("Usage: /addadmin <telegram_user_id>")
+        await update.message.reply_text("Usage: /addadmin <telegram_user_id>", reply_markup=with_website())
         return
     database.add_admin(int(context.args[0]))
-    await update.message.reply_text("✅ Admin added.")
+    await update.message.reply_text("✅ Admin added.", reply_markup=with_website())
 
 
 @admin_only
 async def remove_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("Usage: /removeadmin <telegram_user_id>")
+        await update.message.reply_text("Usage: /removeadmin <telegram_user_id>", reply_markup=with_website())
         return
     user_id = int(context.args[0])
     if user_id == update.effective_user.id:
-        await update.message.reply_text("You can't remove yourself.")
+        await update.message.reply_text("You can't remove yourself.", reply_markup=with_website())
         return
     removed = database.remove_admin(user_id)
-    await update.message.reply_text("✅ Admin removed." if removed else "That user isn't an admin.")
+    await update.message.reply_text("✅ Admin removed." if removed else "That user isn't an admin.", reply_markup=with_website())
 
 
 def get_handlers():
