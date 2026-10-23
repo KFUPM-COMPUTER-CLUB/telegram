@@ -65,4 +65,4 @@ git switch main && git pull && git branch -d feature/short-name
 - `git status` shows no `.env`, `bot.db` or `.venv`.
 
 ## Found a bug or have an idea?
-Open an issue on GitHub. There are templates for bug reports and feature ideas.
+Open an issue on GitHub. 

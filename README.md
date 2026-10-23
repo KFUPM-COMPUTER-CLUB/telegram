@@ -8,7 +8,6 @@
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![python-telegram-bot 21+](https://img.shields.io/badge/python--telegram--bot-21%2B-26A5E4?logo=telegram&logoColor=white)
 ![SQLite](https://img.shields.io/badge/database-SQLite-003B57?logo=sqlite&logoColor=white)
-[![MIT License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 ![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4)
 
 [🌐 Website](https://cckfupm.vercel.app/) &nbsp;·&nbsp; [💬 Commands](#-commands) &nbsp;·&nbsp; [🚀 Quick start](#-quick-start) &nbsp;·&nbsp; [☁️ Hosting](docs/DEPLOY.md) &nbsp;·&nbsp; [🤝 Contribute](workflow.md)
