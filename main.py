@@ -10,6 +10,7 @@ import database
 import admin
 import events
 import announcements
+import buttons
 
 load_dotenv()  # reads the .env file
 
@@ -37,7 +38,7 @@ def main():
     app = Application.builder().token(token).build()
 
     # Each file provides its handlers through get_handlers()
-    for module in (events, announcements, admin):
+    for module in (events, announcements, admin, buttons):
         for handler in module.get_handlers():
             app.add_handler(handler)
 

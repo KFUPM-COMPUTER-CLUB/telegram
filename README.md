@@ -10,7 +10,8 @@ A bot that sends announcements to the club's Telegram groups and reminds members
 3. Install libraries: `pip install -r requirements.txt`
 4. Create your OWN test bot with @BotFather on Telegram and copy its token.
 5. Copy `.env.example` to `.env` and fill in `BOT_TOKEN` and `INITIAL_ADMIN_IDS`
-   (get your user ID from @userinfobot).
+   (get your user ID from @userinfobot). Optionally set `WEBSITE_URL` to the club website
+   (must start with `https://`). Until it is set, the 🌐 button under the bot's replies just shows "coming soon".
 6. Run the bot: `python main.py`
 
 Groups are registered automatically when an admin adds the bot to them (and removed when the bot is removed). Use `/groups` to see the list.
