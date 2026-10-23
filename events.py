@@ -3,6 +3,7 @@ and the automatic day-before reminders sent to all registered groups."""
 import logging
 import re
 from datetime import date, datetime, time, timedelta
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -77,6 +78,26 @@ def _event_text(event, today=None, prefix="📌"):
     event_date = date.fromisoformat(event["date"])
     when = f" · {_when(event_date, today)}" if today else ""
     return f"{prefix} {event['title']}\n📅 {event_date.strftime('%A, %d %B %Y')}{when}"
+
+
+def calendar_url(event):
+    """A link that opens Google Calendar with this event already filled in, as an all-day event.
+    Events only have a date (no time), so it is an all-day entry."""
+    start = date.fromisoformat(event["date"])
+    end = start + timedelta(days=1)  # Google's end date for all-day events is exclusive
+    params = {
+        "action": "TEMPLATE",
+        "text": event["title"],
+        "dates": f"{start:%Y%m%d}/{end:%Y%m%d}",
+        "details": "Added from the KFUPM Computer Club Telegram bot.",
+    }
+    # quote (not the default quote_plus) so spaces become %20; titles may hold Arabic, emoji, & or #.
+    return "https://calendar.google.com/calendar/render?" + urlencode(params, quote_via=quote)
+
+
+def calendar_markup(event):
+    """A keyboard with one 'Add to Google Calendar' link button for this event."""
+    return InlineKeyboardMarkup([[InlineKeyboardButton("📆 Add to Google Calendar", url=calendar_url(event))]])
 
 
 async def _send_event(bot, chat_id, text, event, reply_markup=None):
@@ -232,7 +253,9 @@ async def view_event_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = _event_text(event, _today())
     if not event.get("poster"):
         text += "\n🖼 No poster yet."
-    await _send_event(context.bot, query.message.chat_id, text, event, reply_markup=with_website())
+    await _send_event(
+        context.bot, query.message.chat_id, text, event, reply_markup=with_website(calendar_markup(event))
+    )
 
 
 # ---------- /deleteevent ----------
@@ -499,7 +522,7 @@ async def _broadcast(bot, text, event):
     sent = failed = 0
     for group in database.get_groups():
         try:
-            await _send_event(bot, group["group_id"], text, event)
+            await _send_event(bot, group["group_id"], text, event, reply_markup=calendar_markup(event))
             sent += 1
         except TelegramError as error:
             failed += 1
