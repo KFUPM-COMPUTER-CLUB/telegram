@@ -64,5 +64,3 @@ git switch main && git pull && git branch -d feature/short-name
 - You tried your change in Telegram, as an admin and as a normal user.
 - `git status` shows no `.env`, `bot.db` or `.venv`.
 
-## Found a bug or have an idea?
-Open an issue on GitHub. There are templates for bug reports and feature ideas.
