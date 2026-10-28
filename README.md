@@ -1,16 +1,25 @@
 <div align="center">
 
-# 🤖 KFUPM Computer Club Bot
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/cc-logo-white-grey.png">
+  <img src="docs/assets/cc-logo-color-dark-text.svg" alt="Computer Club, KFUPM" width="180">
+</picture>
 
-**The club's Telegram assistant: it announces, it reminds, and it keeps everyone in the loop.**
+<br>
+
+<code>TELEGRAM BOT · KFUPM COMPUTER CLUB</code>
+
+# Announce. Remind. **Show up.**
+
+The club's Telegram bot. It posts announcements and event reminders in every club group, on time, in the club's style.
 
 [![CI](https://github.com/KFUPM-COMPUTER-CLUB/telegram/actions/workflows/ci.yml/badge.svg)](https://github.com/KFUPM-COMPUTER-CLUB/telegram/actions/workflows/ci.yml)
-![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
-![python-telegram-bot 21+](https://img.shields.io/badge/python--telegram--bot-21%2B-26A5E4?logo=telegram&logoColor=white)
-![SQLite](https://img.shields.io/badge/database-SQLite-003B57?logo=sqlite&logoColor=white)
-![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-337DFE?logo=python&logoColor=white&labelColor=0A0B0D)
+![python-telegram-bot 22.7+](https://img.shields.io/badge/python--telegram--bot-22.7%2B-337DFE?logo=telegram&logoColor=white&labelColor=0A0B0D)
+![SQLite](https://img.shields.io/badge/database-SQLite-337DFE?logo=sqlite&logoColor=white&labelColor=0A0B0D)
+![PRs welcome](https://img.shields.io/badge/PRs-welcome-337DFE?labelColor=0A0B0D)
 
-[🌐 Website](https://cckfupm.vercel.app/) &nbsp;·&nbsp; [💬 Commands](#-commands) &nbsp;·&nbsp; [🚀 Quick start](#-quick-start) &nbsp;·&nbsp; [☁️ Hosting](docs/DEPLOY.md) &nbsp;·&nbsp; [🤝 Contribute](workflow.md)
+[Website](https://cckfupm.vercel.app/) · [Commands](#-commands) · [Quick start](#-quick-start) · [Brand rules](#-brand-rules) · [Contribute](workflow.md)
 
 </div>
 
@@ -18,68 +27,71 @@
 
 ## ✨ What it does
 
-- 📢 **Announcements:** admins send text, photos or videos to every club group at once, or schedule them for later.
-- 📅 **Events:** admins add events with a poster. Everyone can browse what's coming up with `/events`.
-- 🔔 **Reminders:** every group gets an automatic reminder at 9:00 AM (Riyadh time) the day before each event.
-- 📆 **Add to calendar:** every event comes with an *Add to Google Calendar* button.
-- 👥 **Zero-setup groups:** add the bot to a group as an admin and the group is registered automatically.
-- 🌐 **Club website:** a button under every reply opens [cckfupm.vercel.app](https://cckfupm.vercel.app/).
+| | |
+|---|---|
+| **📢 Announcements** | Post text, photos or videos to every club group at once, now or later. A link on the last line becomes a button. |
+| **📅 Events** | Add an event with a date, a description, and an optional poster and link. Post it to every group as a card with `/announce event`. |
+| **🔔 Reminders** | Every group gets a reminder at 9:00 AM (Riyadh time) the day before each event. Nobody has to remember. |
+| **📆 Calendar** | Every event has an *Add to Google Calendar* button, plus an *Event details* button when it has a link. |
+| **👥 Zero setup** | An admin adds the bot to a group and the group is registered. Remove the bot and it's forgotten. |
+| **🔒 Admins only** | Every command is for club admins. `/start` shows anyone their user ID so they can be added. |
 
-## 💬 What it looks like
+## 👀 What groups see
 
-`/events` shows the upcoming list, and tapping a number opens that event with its poster:
+<img src="docs/assets/reminder-preview.svg" alt="A reminder in a group: label, event name, date, the club footer and three blue buttons" width="440">
 
-```text
-📅 Upcoming events (2):
-
-1. Python Workshop
-    🗓 Tue, 27 Oct 2026 · in 4 days
-2. Hack Night
-    🗓 Thu, 05 Nov 2026 · in 13 days
-
-👀 Tap a number to see the full event info:
-[ 1 ] [ 2 ]
-[ 🌐 Club website ]
-```
-
-The day before an event, each group gets:
-
-```text
-🔔 Reminder: Python Workshop is tomorrow!
-📅 Tuesday, 27 October 2026
-[ 📆 Add to Google Calendar ]
-```
+The day before an event, every group gets the poster with this caption. The buttons are Club Blue in Telegram apps from February 2026 on. An announcement made with `/announce event` looks the same, with an `UPCOMING EVENT` label and the event's description under the date. There's no "in 5 days" countdown, because a sent message never updates and the count would go stale.
 
 ## 💬 Commands
 
-### Everyone
+### General
 
-| Command | What it does |
-|---|---|
-| `/help` | Lists the commands |
-| `/events` | Upcoming events. Tap a number for the poster, date and an *Add to Google Calendar* button |
+| Command | Who can use it | What it does |
+|---|---|---|
+| `/help` | Admins (anyone else gets no reply) | A plain-language guide to every command, with examples you can tap to copy |
+| `/start` | Anyone | Shows your Telegram user ID and explains how to add an admin |
 
 ### Admins only
 
 | Command | What it does |
 |---|---|
 | **📅 Events** | |
-| `/addevent` | Add an event, step by step: name, date (`YYYY-MM-DD`), poster |
-| `/editevent` | Change an event's name, date or poster |
+| `/events` | Upcoming events. Tap a number to open one with its poster and buttons |
+| `/addevent` | Add an event in 4 steps: name, date (`YYYY-MM-DD`), description, then the poster and link together (both optional) |
+| `/editevent` | Change an event's name, date, description, link or poster |
 | `/deleteevent` | Delete an event |
-| `/sendreminder` | Send a reminder about one event, or all of them, to every group right now |
 | **📢 Announcements** | |
-| `/announce <text>` | Send a message to every group now. Attach a photo or video by putting the command in its caption |
-| `/schedule_announce YYYY-MM-DD HH:MM <text>` | Send it later (Saudi time) |
+| `/announce <text>` | Post to every group now. For a photo or video, put the command in its caption |
+| `/announce event` | Pick an event and post it as a card: poster, name, date, description and buttons |
+| `/schedule_announce YYYY-MM-DD HH:MM <text>` | Post it later (Saudi time) |
+| `/schedule_announce YYYY-MM-DD HH:MM event` | Post an event card later |
 | `/scheduled` | List the pending announcements |
 | `/edit_announce <id> YYYY-MM-DD HH:MM <new text>` | Change a pending announcement |
 | `/cancel_announce <id>` | Cancel a pending announcement |
 | **👥 Groups and admins** | |
 | `/groups` | List the registered groups |
 | `/addadmin <user_id>` · `/removeadmin <user_id>` | Add or remove an admin |
-| `/adminhelp` | Shows this list inside Telegram |
 
-While adding or editing an event, `/cancel` stops and `/skip` skips the poster.
+**Links in announcements.** Put the link alone on the last line (or write `link: example.com`) and it becomes a *🔗 Open link* button:
+
+```text
+/announce Applications for the hackathon are open!
+https://forms.gle/abc123
+```
+
+Bold, italics and other formatting you use in an announcement or an event description are kept. The announcement is posted exactly as written, with the club footer under it.
+
+**Adding an event.** The last step takes the poster and the link together: send the poster as a photo with the link as its caption, or just the photo, or just the link, or `/skip` for neither. `/cancel` stops at any step. While editing a link, `/remove` deletes it.
+
+## 🎨 Brand rules
+
+Everything the bot posts follows the club's brand guidelines (v1.0). The rules live in [`brand.py`](brand.py):
+
+- **Voice:** short, direct sentences. Technical, confident, a little playful. No hype words, no em dashes.
+- **One emoji per message** at most. Buttons can have their own.
+- **Labels** are monospace caps joined by a middle dot: `REMINDER · TOMORROW`. Event names are bold.
+- **Footer:** every group post ends with `@kfupm_cc · #MaxThroughput`.
+- **Buttons:** blue for links and choices, green to confirm, red to delete.
 
 ## ⚙️ How it works
 
@@ -107,7 +119,7 @@ python main.py                     # wait for "Bot is running."
 1. Install **Python 3.10+** and **Git** first.
 2. Create **your own test bot** with [@BotFather](https://t.me/BotFather) and copy its token. Don't use the club's real bot while developing.
 3. Get your Telegram user ID from [@userinfobot](https://t.me/userinfobot).
-4. Send `/help` to your bot to check it works. To try group features, add it to a test group.
+4. Send `/start` to your bot to check it works and see your user ID. To try group features, add it to a test group.
 
 ### Configuration (`.env`)
 
@@ -123,10 +135,12 @@ python main.py                     # wait for "Bot is running."
 telegram/
 ├── main.py              starts the bot and connects every module
 ├── database.py          all SQL lives here, nowhere else
-├── admin.py             /help, /groups, admin management, the @admin_only decorator
-├── events.py            events, Google Calendar button, automatic reminders
-├── announcements.py     /announce and scheduled announcements
-├── buttons.py           the 🌐 club website button
+├── admin.py             /start, /help, /groups, admin management, the @admin_only decorator
+├── events.py            events, their buttons, automatic reminders
+├── announcements.py     /announce, event announcements, scheduled announcements
+├── brand.py             the club's look and voice: labels, footer, link checks
+├── buttons.py           colored buttons and the 🌐 club website button
+├── docs/assets/         logos and the README preview
 ├── tests/smoke_test.py  quick self-check
 ├── .github/             automatic checks, pull request and issue templates
 ├── .env.example         settings template
@@ -152,3 +166,7 @@ New here? Read **[workflow.md](workflow.md)**. The short version:
 <a href="https://github.com/DNILX"><img src="https://github.com/DNILX.png?size=64" width="64" alt="Daniel Albohassan" title="Daniel Albohassan"></a>
 
 See who built what in [CONTRIBUTORS.md](CONTRIBUTORS.md).
+
+---
+
+<div align="center"><code>@kfupm_cc · #MaxThroughput</code></div>

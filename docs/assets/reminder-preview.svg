@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400" role="img" aria-labelledby="title desc">
+  <title id="title">Event reminder preview</title>
+  <desc id="desc">The reminder each group gets the day before an event: a label, the event name, the date, the club footer, and three blue buttons for the event link, Google Calendar and the club website.</desc>
+  <defs>
+    <clipPath id="frame"><rect width="600" height="400" rx="20"/></clipPath>
+    <style>
+      .mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .sans { font-family: Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+      .head { font-family: Poppins, Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+    </style>
+  </defs>
+  <g clip-path="url(#frame)">
+    <!-- Club Black page with the blue edge bar, the brand's signature -->
+    <rect width="600" height="400" fill="#0A0B0D"/>
+    <rect width="8" height="400" fill="#337DFE"/>
+
+    <!-- The message: a Surface Dark card -->
+    <rect x="40" y="36" width="520" height="172" rx="16" fill="#14171D" stroke="#272C36"/>
+    <text x="64" y="76" class="mono" font-size="14" letter-spacing="2" fill="#337DFE">🔔 REMINDER · TOMORROW</text>
+    <text x="64" y="118" class="head" font-size="28" font-weight="700" fill="#FFFFFF">Python Workshop</text>
+    <text x="64" y="146" class="mono" font-size="14" letter-spacing="1.5" fill="#AEB6C4">TUESDAY · 27 OCT 2026</text>
+    <text x="64" y="186" class="mono" font-size="13" fill="#AEB6C4">@kfupm_cc · #MaxThroughput</text>
+
+    <!-- Buttons in Club Blue, like Telegram's blue button style -->
+    <g class="sans" font-size="16" font-weight="600" fill="#FFFFFF" text-anchor="middle">
+      <rect x="40" y="220" width="520" height="48" rx="12" fill="#337DFE"/>
+      <text x="300" y="250">🔗 Event details</text>
+      <rect x="40" y="276" width="520" height="48" rx="12" fill="#337DFE"/>
+      <text x="300" y="306">📆 Add to Google Calendar</text>
+      <rect x="40" y="332" width="520" height="48" rx="12" fill="#337DFE"/>
+      <text x="300" y="362">🌐 Club website</text>
+    </g>
+    <g class="sans" font-size="13" fill="#FFFFFF" text-anchor="end">
+      <text x="550" y="236">↗</text>
+      <text x="550" y="292">↗</text>
+      <text x="550" y="348">↗</text>
+    </g>
+  </g>
+</svg>

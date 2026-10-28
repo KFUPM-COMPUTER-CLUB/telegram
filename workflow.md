@@ -38,16 +38,19 @@ git switch main && git pull && git branch -d feature/short-name
 |---|---|
 | `main.py` | Starts the bot and connects every module's handlers |
 | `database.py` | **All** database code |
-| `admin.py` | `/help`, `/adminhelp`, `/groups`, admin management, the `@admin_only` decorator |
-| `events.py` | Event commands, the Google Calendar button and the automatic day-before reminders |
-| `announcements.py` | `/announce` and scheduled announcements |
-| `buttons.py` | The 🌐 club website button added under replies |
+| `admin.py` | `/start`, `/help`, `/groups`, admin management, the `@admin_only` decorator |
+| `events.py` | Event commands, event cards and buttons, and the automatic day-before reminders |
+| `announcements.py` | `/announce`, event announcements and scheduled announcements |
+| `brand.py` | The club's look and voice: labels, footer, HTML escaping, link checks |
+| `buttons.py` | Colored buttons and the 🌐 club website button added under announcements and reminders |
 | `tests/smoke_test.py` | Quick self-check: every module loads, every handler builds, the database works |
 
 ## Rules for the code
 - **No SQL outside `database.py`.** Add a function there and call it.
 - **Admin-only commands** get the `@admin_only` decorator from `admin.py`.
-- **Replies to users carry the website button:** pass `reply_markup=with_website()` (or `with_website(your_keyboard)` if the reply has its own buttons). Messages the bot sends *into groups* (announcements, reminders) do not.
+- **Only announcements and reminders sent into groups carry the website button:** pass `reply_markup=with_website()` (or `with_website(your_keyboard)` to add it under other buttons). Replies to admin commands don't get it.
+- **Every command is admin-only:** put `@admin_only` on new commands. Only `/start` is open to everyone.
+- **Follow the brand:** build messages with the helpers in `brand.py` (`kicker`, `headline`, `post`) and read the rules at the top of that file. Messages are HTML, so pass anything a user typed through `esc()`. Buttons come from `buttons.py`: `link_button` for links, `action_button` with `GREEN` to confirm or `RED` to delete.
 - **Times are Saudi time.** Use `_today()` in `events.py`, not `date.today()`, because the server may be in another timezone.
 - **Long messages:** Telegram allows 4096 characters per message (1024 for a photo or video caption).
 - **Secrets:** never commit `.env` or `bot.db` (they are in `.gitignore`). If a bot token is ever pushed to GitHub, revoke it right away with `/revoke` in @BotFather, because deleting the commit is not enough.
@@ -55,13 +58,13 @@ git switch main && git pull && git branch -d feature/short-name
 ## Adding a new command
 1. Write the handler function in the file where it belongs (or a new file, which needs a `get_handlers()` function).
 2. Return it from that file's `get_handlers()`. If you created a new file, also add it to the module list in `main.py`.
-3. List it in `USER_HELP` or `ADMIN_HELP` in `admin.py` so people can find it.
+3. List it in `HELP_TEXT` in `admin.py` so admins can find it. The marketing team uses the bot, so write it in plain words (no `<placeholders>`) and add a copyable example in `<code>` if the command needs more than its name.
 4. Run it on your test bot, including the failure cases: wrong input, a non-admin trying it, an empty list.
 
 ## Before you open the pull request
 - `python tests/smoke_test.py` prints "All checks passed". (GitHub runs it again automatically on your pull request.)
 - The bot starts and shows "Bot is running." with no errors.
-- You tried your change in Telegram, as an admin and as a normal user.
+- You tried your change in Telegram, as an admin and as a normal user (who should get no access).
 - `git status` shows no `.env`, `bot.db` or `.venv`.
 
 ## Found a bug or have an idea?
