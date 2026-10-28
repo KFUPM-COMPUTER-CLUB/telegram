@@ -1,12 +1,15 @@
-"""events.py - event commands (/addevent, /events, /deleteevent, /editevent, /sendreminder)
-and the automatic day-before reminders sent to all registered groups."""
+"""events.py - event commands (/addevent, /events, /deleteevent, /editevent)
+and the automatic day-before reminders sent to all registered groups.
+
+Messages here are HTML (see brand.py), so anything typed by a user goes through esc()."""
 import logging
 import re
 from datetime import date, datetime, time, timedelta
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import (
     CallbackQueryHandler,
@@ -19,23 +22,31 @@ from telegram.ext import (
 
 import admin
 import database
-from buttons import with_website
+from brand import clean_url, esc, formatted_text, headline, kicker, post, visible_length
+from buttons import GREEN, RED, action_button, link_button, with_website
 
 logger = logging.getLogger(__name__)
 
+HTML = ParseMode.HTML
+
 # Conversation steps. ConversationHandler remembers which step each user is on and sends
 # their next message to the matching function below.
-NAME, DATE, POSTER = range(3)  # changed: POSTER step added
-E_CHOOSE_EVENT, E_CHOOSE_FIELD, E_NEW_NAME, E_NEW_DATE, E_NEW_POSTER = range(10, 15)  # changed: poster
+NAME, DATE, DESCRIPTION, POSTER_AND_LINK = range(4)
+(E_CHOOSE_EVENT, E_CHOOSE_FIELD, E_NEW_NAME, E_NEW_DATE, E_NEW_DESCRIPTION,
+ E_NEW_LINK, E_NEW_POSTER) = range(10, 17)
 
 MAX_YEARS_AHEAD = 10  # rejects typos like 20260
 MAX_TITLE_LENGTH = 100
+# A poster's caption is limited to 1024 characters; this leaves room for the name, date and footer.
+MAX_DESCRIPTION_LENGTH = 700
 BUTTONS_PER_ROW = 5
 
 SAUDI_TZ = ZoneInfo("Asia/Riyadh")
 
 # Automatic reminders go out at this local time, the day before each event.
 REMINDER_TIME = time(hour=9, minute=0, tzinfo=SAUDI_TZ)
+
+BAD_LINK = "That doesn't look like a link. Send something like https://forms.gle/abc123, or /skip."
 
 
 def _today():
@@ -49,9 +60,9 @@ def _today():
 def _check_title(title):
     """Returns an error message, or None if the title is OK."""
     if not title:
-        return "The name can't be empty. Please send the event name."
+        return "The name can't be empty. Send the event name."
     if len(title) > MAX_TITLE_LENGTH:
-        return f"That name is too long ({len(title)} characters). Max is {MAX_TITLE_LENGTH}. Try again."
+        return f"That name is {len(title)} characters. Keep it under {MAX_TITLE_LENGTH} and try again."
     return None
 
 
@@ -61,141 +72,19 @@ def _parse_date(text):
     today = _today()
     # Exactly a 4-digit year, 2-digit month and 2-digit day (so '2026-1-5' or '5/1/2026' are rejected).
     if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", text):
-        return None, f"Please send the date in the format YYYY-MM-DD, e.g. {today.isoformat()}."
+        return None, f"Send the date as YYYY-MM-DD, e.g. {today.isoformat()}."
     try:
         parsed = date.fromisoformat(text)  # raises ValueError for 2026-02-30, month 13, etc.
     except ValueError:
-        return None, f"{text} isn't a real date. Check the month and day, and use the format YYYY-MM-DD."
+        return None, f"{text} isn't a real date. Check the month and day (YYYY-MM-DD)."
     if parsed < today:
-        return None, f"{text} has already passed. Please send today's date ({today.isoformat()}) or later."
+        return None, f"{text} has already passed. Send today ({today.isoformat()}) or later."
     if parsed.year > today.year + MAX_YEARS_AHEAD:
-        return None, f"{parsed.year} is too far ahead. Please send a year up to {today.year + MAX_YEARS_AHEAD}."
+        return None, f"{parsed.year} is too far ahead. Send a year up to {today.year + MAX_YEARS_AHEAD}."
     return parsed, None
 
 
-def _event_text(event, today=None, prefix="📌"):
-    """'📌 Title\n📅 Monday, 27 October 2026 · in 6 days' (the '· in N days' part only with today)."""
-    event_date = date.fromisoformat(event["date"])
-    when = f" · {_when(event_date, today)}" if today else ""
-    return f"{prefix} {event['title']}\n📅 {event_date.strftime('%A, %d %B %Y')}{when}"
-
-
-def calendar_url(event):
-    """A link that opens Google Calendar with this event already filled in, as an all-day event.
-    Events only have a date (no time), so it is an all-day entry."""
-    start = date.fromisoformat(event["date"])
-    end = start + timedelta(days=1)  # Google's end date for all-day events is exclusive
-    params = {
-        "action": "TEMPLATE",
-        "text": event["title"],
-        "dates": f"{start:%Y%m%d}/{end:%Y%m%d}",
-        "details": "Added from the KFUPM Computer Club Telegram bot.",
-    }
-    # quote (not the default quote_plus) so spaces become %20; titles may hold Arabic, emoji, & or #.
-    return "https://calendar.google.com/calendar/render?" + urlencode(params, quote_via=quote)
-
-
-def calendar_markup(event):
-    """A keyboard with one 'Add to Google Calendar' link button for this event."""
-    return InlineKeyboardMarkup([[InlineKeyboardButton("📆 Add to Google Calendar", url=calendar_url(event))]])
-
-
-async def _send_event(bot, chat_id, text, event, reply_markup=None):
-    """Added for posters: sends the poster photo with text as its caption, or just the text
-    if the event has no poster. Works for private chats and groups alike."""
-    if event.get("poster"):
-        await bot.send_photo(chat_id=chat_id, photo=event["poster"], caption=text, reply_markup=reply_markup)
-    else:
-        await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
-
-
-# ---------- Add event conversation ----------
-
-@admin.admin_only
-async def add_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Entry point: the /addevent command."""
-    context.user_data["new_event"] = {}  # per-user scratch space for the answers
-    await update.message.reply_text(
-        "📝 Let's add an event.\nSend me the event name (or /cancel to stop).",
-        reply_markup=with_website(),
-    )
-    return NAME
-
-
-async def add_event_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    title = update.message.text.strip()
-    error = _check_title(title)
-    if error:
-        await update.message.reply_text(error, reply_markup=with_website())
-        return NAME
-
-    context.user_data["new_event"]["title"] = title
-    await update.message.reply_text(
-        f"Got it: “{title}”.\nNow send the date in the format YYYY-MM-DD (e.g. {_today().isoformat()}),"
-        " or /cancel to stop.",  # changed: the date step now also offers /cancel
-        reply_markup=with_website(),
-    )
-    return DATE
-
-
-async def add_event_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    event_date, error = _parse_date(update.message.text)
-    if error:
-        await update.message.reply_text(error, reply_markup=with_website())
-        return DATE
-
-    # changed: the date is kept until the poster step; saving happens in _save_new_event
-    context.user_data["new_event"]["date"] = event_date.isoformat()
-    await update.message.reply_text(
-        "🖼 Now send the event poster as a photo (not as a file).\n"
-        "Send /skip if there is no poster, or /cancel to stop.",
-        reply_markup=with_website(),
-    )
-    return POSTER
-
-
-async def add_event_poster(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """A photo arrived: keep the largest size's file_id and save the event."""
-    context.user_data["new_event"]["poster"] = update.message.photo[-1].file_id
-    return await _save_new_event(update, context)
-
-
-async def add_event_skip_poster(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/skip: save the event without a poster."""
-    context.user_data["new_event"]["poster"] = None
-    return await _save_new_event(update, context)
-
-
-async def add_event_not_a_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Please send the poster as a photo, or /skip if there is none.", reply_markup=with_website())
-    return POSTER
-
-
-async def _save_new_event(update, context):
-    event = context.user_data.pop("new_event")
-    event["id"] = database.add_event(event["title"], event["date"], event["poster"])
-    logger.info("Event #%s '%s' added for %s (poster: %s).",
-                event["id"], event["title"], event["date"], bool(event["poster"]))
-
-    # Success message ends with a /help shortcut (Telegram makes /commands tappable) so the user
-    # can go straight to the next command. It is sent with the poster when there is one.
-    await _send_event(
-        context.bot, update.effective_chat.id,
-        f"✅ Event registered!\n\n{_event_text(event)}\n\nUse /help to see the commands.",
-        event,
-        reply_markup=with_website(),
-    )
-    return ConversationHandler.END
-
-
-async def add_event_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/cancel at any step leaves the conversation without saving."""
-    context.user_data.pop("new_event", None)
-    await update.message.reply_text("❌ Cancelled. Nothing was saved.\nUse /help to see the commands.", reply_markup=with_website())
-    return ConversationHandler.END
-
-
-# ---------- /events ----------
+# ---------- How an event looks ----------
 
 def _when(event_date, today):
     """Short hint like 'today', 'tomorrow' or 'in 5 days'."""
@@ -207,77 +96,301 @@ def _when(event_date, today):
     return f"in {days} days"
 
 
+def _date_label(event):
+    """'TUESDAY · 27 OCT 2026' in monospace."""
+    event_date = date.fromisoformat(event["date"])
+    return kicker(event_date.strftime("%A"), event_date.strftime("%d %b %Y"))
+
+
+def event_card(event, label, message=None, with_description=True):
+    """An event in the club's style:
+
+        LABEL
+        Python Workshop          (bold)
+        TUESDAY · 27 OCT 2026
+
+        description (if it has one)
+
+        message
+    """
+    description = event.get("description") if with_description else None
+    blocks = [label, f"{headline(event['title'])}\n{_date_label(event)}", description, message]
+    return "\n\n".join(block for block in blocks if block)
+
+
+def calendar_url(event):
+    """A link that opens Google Calendar with this event already filled in, as an all-day event.
+    Events only have a date (no time), so it is an all-day entry."""
+    start = date.fromisoformat(event["date"])
+    end = start + timedelta(days=1)  # Google's end date for all-day events is exclusive
+    details = "Added from the KFUPM Computer Club Telegram bot."
+    if event.get("url"):
+        details += f"\n{event['url']}"
+    params = {
+        "action": "TEMPLATE",
+        "text": event["title"],
+        "dates": f"{start:%Y%m%d}/{end:%Y%m%d}",
+        "details": details,
+    }
+    # quote (not the default quote_plus) so spaces become %20; titles may hold Arabic, emoji, & or #.
+    return "https://calendar.google.com/calendar/render?" + urlencode(params, quote_via=quote)
+
+
+def event_markup(event, with_calendar=True):
+    """The event's buttons: its link (if it has one) and 'Add to Google Calendar'.
+    Returns None if there are no buttons."""
+    rows = []
+    if event.get("url"):
+        rows.append([link_button("🔗 Event details", event["url"])])
+    if with_calendar:
+        rows.append([link_button("📆 Add to Google Calendar", calendar_url(event))])
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+def announcement_text(event):
+    """The event card posted to groups by '/announce event'. No 'in 5 days': a sent message
+    never changes, so it would soon be wrong."""
+    return post(event_card(event, kicker("Upcoming event")))
+
+
+def _reminder_text(event, today):
+    """The reminder posted to groups the day before (or the same day, if the bot was off)."""
+    when = "today" if date.fromisoformat(event["date"]) == today else "tomorrow"
+    return post(event_card(event, "🔔 " + kicker("Reminder", when), with_description=False))
+
+
+async def _send_event(bot, chat_id, text, event, reply_markup=None):
+    """Sends the poster photo with text as its caption, or just the text if the event has
+    no poster. text is HTML. Works for private chats and groups alike."""
+    if event.get("poster"):
+        await bot.send_photo(chat_id=chat_id, photo=event["poster"], caption=text,
+                             parse_mode=HTML, reply_markup=reply_markup)
+    else:
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode=HTML, reply_markup=reply_markup)
+
+
+async def _reply(update, text, reply_markup=None):
+    await update.message.reply_text(text, parse_mode=HTML, reply_markup=reply_markup)
+
+
+# ---------- Add event conversation ----------
+
+@admin.admin_only
+async def add_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry point: the /addevent command."""
+    context.user_data["new_event"] = {}  # per-user scratch space for the answers
+    await _reply(update, f"{kicker('New event', 'step 1 of 4')}\n\n📝 What's the event called?\n\n/cancel to stop.")
+    return NAME
+
+
+async def add_event_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    title = update.message.text.strip()
+    error = _check_title(title)
+    if error:
+        await _reply(update, esc(error))
+        return NAME
+
+    context.user_data["new_event"]["title"] = title
+    await _reply(
+        update,
+        f"{kicker('New event', 'step 2 of 4')}\n\n📅 When is {headline(title)}?\n"
+        f"Send the date as YYYY-MM-DD, e.g. {_today().isoformat()}.\n\n/cancel to stop.",
+    )
+    return DATE
+
+
+async def add_event_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    event_date, error = _parse_date(update.message.text)
+    if error:
+        await _reply(update, esc(error))
+        return DATE
+
+    # the date is kept until the last step; saving happens in _save_new_event
+    context.user_data["new_event"]["date"] = event_date.isoformat()
+    await _reply(
+        update,
+        f"{kicker('New event', 'step 3 of 4')}\n\n✍️ Describe the event. This is what people read "
+        "when you announce it. Bold, italics and links are kept.\n\n/cancel to stop.",
+    )
+    return DESCRIPTION
+
+
+def _check_description(message):
+    """Returns (description as HTML, None) if it's OK, or (None, error message)."""
+    description = formatted_text(message)
+    if not description:
+        return None, "The description can't be empty. Send a few words about the event."
+    length = visible_length(description)
+    if length > MAX_DESCRIPTION_LENGTH:
+        return None, (f"That's {length} characters. Keep it under {MAX_DESCRIPTION_LENGTH} "
+                      "so it fits under the poster, and send it again.")
+    return description, None
+
+
+async def add_event_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    description, error = _check_description(update.message)
+    if error:
+        await _reply(update, esc(error))
+        return DESCRIPTION
+
+    context.user_data["new_event"]["description"] = description
+    await _reply(
+        update,
+        f"{kicker('New event', 'step 4 of 4')}\n\n🖼 Last step: the poster and the link. Both are optional.\n\n"
+        "• <b>Poster and link:</b> send the poster as a photo, with the link as its caption.\n"
+        "• <b>Only a poster:</b> send the photo.\n"
+        "• <b>Only a link:</b> send the link.\n"
+        "• <b>Neither:</b> send /skip.\n\n"
+        "The link becomes a button under the event.",
+    )
+    return POSTER_AND_LINK
+
+
+async def add_event_description_not_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _reply(update, "Send the description as a text message. The poster comes next.")
+    return DESCRIPTION
+
+
+async def add_event_poster(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """A photo arrived, maybe with the link as its caption: save the event."""
+    url = None
+    if update.message.caption:
+        url = clean_url(update.message.caption)
+        if url is None:
+            await _reply(update, "The caption should be just the link, e.g. https://forms.gle/abc123. "
+                                 "Send the photo again with a working link, or without a caption.")
+            return POSTER_AND_LINK
+
+    context.user_data["new_event"].update(poster=update.message.photo[-1].file_id, url=url)
+    return await _save_new_event(update, context)
+
+
+async def add_event_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Text arrived: it should be a link (an event without a poster)."""
+    url = clean_url(update.message.text)
+    if url is None:
+        await _reply(update, esc(BAD_LINK))
+        return POSTER_AND_LINK
+
+    context.user_data["new_event"].update(poster=None, url=url)
+    return await _save_new_event(update, context)
+
+
+async def add_event_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/skip: save the event without a poster or a link."""
+    context.user_data["new_event"].update(poster=None, url=None)
+    return await _save_new_event(update, context)
+
+
+async def add_event_not_a_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _reply(update, "Send the poster as a photo (not as a file), the link as text, or /skip.")
+    return POSTER_AND_LINK
+
+
+async def _save_new_event(update, context):
+    event = context.user_data.pop("new_event")
+    event["id"] = database.add_event(event["title"], event["date"], event["poster"], event["url"], event["description"])
+    logger.info("Event #%s '%s' added for %s (poster: %s, link: %s).",
+                event["id"], event["title"], event["date"], bool(event["poster"]), bool(event["url"]))
+
+    await _send_event(
+        context.bot, update.effective_chat.id,
+        event_card(
+            event, "✅ " + kicker("Event saved"),
+            "Groups get a reminder the day before.\n"
+            "Want everyone to know now? Send /announce event.",
+        ),
+        event,
+        reply_markup=event_markup(event, with_calendar=False),
+    )
+    return ConversationHandler.END
+
+
+async def add_event_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/cancel at any step leaves the conversation without saving."""
+    context.user_data.pop("new_event", None)
+    await _reply(update, "❌ Cancelled. Nothing was saved.\nUse /help to see the commands.")
+    return ConversationHandler.END
+
+
+# ---------- /events ----------
+
 def _format_events(events, today):
-    """Numbered list text shared by /events, /editevent and /sendreminder."""
-    lines = [f"📅 Upcoming events ({len(events)}):\n"]
+    """Numbered list text shared by /events, /editevent and '/announce event'."""
+    lines = [f"📅 {headline('Upcoming events')} ({len(events)})"]
     for i, event in enumerate(events, start=1):
         event_date = date.fromisoformat(event["date"])
-        lines.append(
-            f"{i}. {event['title']}\n"
-            f"    🗓 {event_date.strftime('%a, %d %b %Y')} · {_when(event_date, today)}"
-        )
+        when = kicker(event_date.strftime("%a %d %b"), _when(event_date, today))
+        link = " 🔗" if event.get("url") else ""
+        lines.append(f"\n<b>{i}.</b> {esc(event['title'])}{link}\n{when}")
     return "\n".join(lines)
 
 
 def _numbered_buttons(events, prefix):
     """Rows of numbered buttons; each carries '<prefix>:<event id>'."""  # added: shared by several commands
     buttons = [
-        InlineKeyboardButton(str(i), callback_data=f"{prefix}:{event['id']}")
+        action_button(str(i), f"{prefix}:{event['id']}")
         for i, event in enumerate(events, start=1)
     ]
     return [buttons[i : i + BUTTONS_PER_ROW] for i in range(0, len(buttons), BUTTONS_PER_ROW)]
 
 
-async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/events - shows upcoming events, soonest first, with a button per event to see its
-    full info (poster, title, date). Open to everyone."""
+def event_list(prefix, prompt):
+    """(text, keyboard) listing the upcoming events with a numbered button each,
+    or (None, None) if there are none. Used here and by announcements.py."""
     today = _today()
     events = database.get_upcoming_events(today.isoformat())
     if not events:
-        await update.message.reply_text("📅 No upcoming events yet.\nUse /help to see the commands.", reply_markup=with_website())
+        return None, None
+    text = _format_events(events, today) + f"\n\n{prompt}"
+    return text, InlineKeyboardMarkup(_numbered_buttons(events, prefix))
+
+
+NO_EVENTS = "📅 No upcoming events yet. Add one with /addevent."
+
+
+@admin.admin_only
+async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/events - shows upcoming events, soonest first, with a button per event to see its
+    full info (poster, title, date, link)."""
+    text, keyboard = event_list("viewevent", "👀 Tap a number to open the event.")
+    if text is None:
+        await _reply(update, NO_EVENTS)
         return
-    await update.message.reply_text(  # changed: numbered buttons added
-        _format_events(events, today) + "\n\n👀 Tap a number to see the full event info:",
-        reply_markup=with_website(InlineKeyboardMarkup(_numbered_buttons(events, "viewevent"))),
-    )
+    await _reply(update, text, keyboard)
 
 
+@admin.admin_only
 async def view_event_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """A number under /events was pressed: send that event's poster, title and date."""
+    """A number under /events was pressed: send that event's poster, title, date and buttons."""
     query = update.callback_query
     await query.answer()
     event = database.get_event(int(query.data.split(":")[1]))
     if event is None:
-        await query.message.reply_text("⚠️ That event no longer exists. Send /events for the current list.", reply_markup=with_website())
+        await query.message.reply_text("⚠️ That event no longer exists. Send /events for the current list.")
         return
-    text = _event_text(event, _today())
-    if not event.get("poster"):
-        text += "\n🖼 No poster yet."
-    await _send_event(
-        context.bot, query.message.chat_id, text, event, reply_markup=with_website(calendar_markup(event))
-    )
+    when = _when(date.fromisoformat(event["date"]), _today())
+    text = event_card(event, kicker("Event", when), None if event.get("poster") else "<i>No poster yet.</i>")
+    await _send_event(context.bot, query.message.chat_id, text, event, reply_markup=event_markup(event))
 
 
 # ---------- /deleteevent ----------
 
 @admin.admin_only
 async def delete_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/deleteevent - shows one button per upcoming event, labelled with the event's name."""
+    """/deleteevent - shows one red button per upcoming event, labelled with the event's name."""
     events = database.get_upcoming_events(_today().isoformat())
     if not events:
-        await update.message.reply_text("📅 No upcoming events to delete.\nUse /help to see the commands.", reply_markup=with_website())
+        await _reply(update, "📅 No upcoming events to delete.")
         return
 
     # Each button's callback_data carries the event id, e.g. "delevent:7", so the press
     # can be matched to the right row. One button per row, since names can be long.
     buttons = [
-        [InlineKeyboardButton(event["title"], callback_data=f"delevent:{event['id']}")]
+        [action_button(f"🗑 {event['title']}", f"delevent:{event['id']}", style=RED)]
         for event in events
     ]
-    await update.message.reply_text(
-        "🗑 Tap the event you want to delete:",
-        reply_markup=with_website(InlineKeyboardMarkup(buttons)),
-    )
+    await _reply(update, "Tap the event to delete. This can't be undone.", InlineKeyboardMarkup(buttons))
 
 
 @admin.admin_only
@@ -289,123 +402,133 @@ async def delete_event_button(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     event = database.get_event(event_id)
     if event is None or database.delete_event(event_id) == 0:
-        await query.edit_message_text("⚠️ That event was already deleted.\nUse /help to see the commands.", reply_markup=with_website())
+        await query.edit_message_text("⚠️ That event was already deleted.")
         return
 
     logger.info("Event #%s '%s' deleted.", event_id, event["title"])
-    event_date = date.fromisoformat(event["date"])
     await query.edit_message_text(  # editing also removes the buttons
-        f"🗑 Event deleted!\n\n📌 {event['title']}\n📅 {event_date.strftime('%A, %d %B %Y')}"
-        "\n\nUse /help to see the commands.",
-        reply_markup=with_website(),
+        event_card(event, "🗑 " + kicker("Event deleted")),
+        parse_mode=HTML,
     )
 
 
 # ---------- /editevent ----------
 
-def _event_line(event):
-    """'📌 Title\n📅 Monday, 27 October 2026' for result messages."""
-    event_date = date.fromisoformat(event["date"])
-    return f"📌 {event['title']}\n📅 {event_date.strftime('%A, %d %B %Y')}"
-
-
-FIELD_NAMES = ("name", "date", "poster")
+FIELD_NAMES = ("name", "date", "description", "link", "poster")
 
 
 def _field_buttons(exclude=None, with_done=False):
-    """Name/Date/Poster buttons (minus the one just changed) and optionally 'No change'."""  # added
-    row = [
-        InlineKeyboardButton(field.capitalize(), callback_data=f"editfield:{field}")
+    """Name/Date/Description/Link/Poster buttons (minus the one just changed) and optionally 'No change'."""
+    fields = [
+        action_button(field.capitalize(), f"editfield:{field}")
         for field in FIELD_NAMES
         if field != exclude
     ]
+    rows = [fields[i : i + 2] for i in range(0, len(fields), 2)]
     if with_done:
-        row.append(InlineKeyboardButton("✅ No change", callback_data="editdone"))
-    return InlineKeyboardMarkup([row])
+        rows.append([action_button("✅ No change", "editdone", style=GREEN)])
+    return InlineKeyboardMarkup([row for row in rows if row])
 
 
 async def _show(query, text, reply_markup=None):
     """Replaces the message the button was on. A photo message can't become text, so there the
-    buttons are removed and a new message is sent instead. The website button is always added."""  # added
-    reply_markup = with_website(reply_markup)
+    buttons are removed and a new message is sent instead. text is HTML."""
     if query.message.photo:
         await query.edit_message_reply_markup(reply_markup=None)
-        await query.message.reply_text(text, reply_markup=reply_markup)
+        await query.message.reply_text(text, parse_mode=HTML, reply_markup=reply_markup)
     else:
-        await query.edit_message_text(text, reply_markup=reply_markup)
+        await query.edit_message_text(text, parse_mode=HTML, reply_markup=reply_markup)
 
 
 async def _ask_more_changes(update, context, event, changed, result):
-    """After a successful change: show the result and offer the other two fields or 'No change'."""  # added
+    """After a successful change: show the result and offer the other fields or 'No change'."""
     await _send_event(
         context.bot, update.effective_chat.id,
-        f"{result}\n\nWant to change anything else? (or /cancel)",
+        event_card(event, "✅ " + kicker(result), "Change anything else? (or /cancel)"),
         event,
-        reply_markup=with_website(_field_buttons(exclude=changed, with_done=True)),
+        reply_markup=_field_buttons(exclude=changed, with_done=True),
     )
     return E_CHOOSE_FIELD
+
+
+async def _event_gone(update, context):
+    await update.effective_message.reply_text("⚠️ That event no longer exists.\nUse /help to see the commands.")
+    context.user_data.pop("edit_event", None)
+    return ConversationHandler.END
 
 
 @admin.admin_only
 async def edit_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/editevent - shows the upcoming list with one numbered button per event."""
-    today = _today()
-    events = database.get_upcoming_events(today.isoformat())
-    if not events:
-        await update.message.reply_text("📅 No upcoming events to edit.\nUse /help to see the commands.", reply_markup=with_website())
+    text, keyboard = event_list("editevent", "✏️ Tap the number of the event to edit (or /cancel).")
+    if text is None:
+        await _reply(update, "📅 No upcoming events to edit.")
         return ConversationHandler.END
 
     context.user_data.pop("edit_event", None)
-    await update.message.reply_text(
-        _format_events(events, today) + "\n\n✏️ Tap the number of the event to edit (or /cancel):",
-        reply_markup=with_website(InlineKeyboardMarkup(_numbered_buttons(events, "editevent"))),
-    )
+    await _reply(update, text, keyboard)
     return E_CHOOSE_EVENT
 
 
 async def edit_event_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """A numbered button was pressed: ask whether to change the name, the date or the poster."""
+    """A numbered button was pressed: ask which field to change."""
     query = update.callback_query
     await query.answer()
     event_id = int(query.data.split(":")[1])
     event = database.get_event(event_id)
     if event is None:
-        await query.edit_message_text("⚠️ That event no longer exists.\nUse /help to see the commands.", reply_markup=with_website())
+        await query.edit_message_text("⚠️ That event no longer exists.")
         return ConversationHandler.END
 
     context.user_data["edit_event"] = event_id
     await query.edit_message_text(
-        f"✏️ Editing:\n{_event_line(event)}\n\nWhat do you want to change? (or /cancel)",
-        reply_markup=with_website(_field_buttons()),
+        event_card(event, "✏️ " + kicker("Editing"), "What do you want to change? (or /cancel)"),
+        parse_mode=HTML,
+        reply_markup=_field_buttons(),
     )
     return E_CHOOSE_FIELD
 
 
 async def edit_field_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Name, Date or Poster button."""
+    """Name, Date, Description, Link or Poster button."""
     query = update.callback_query
     await query.answer()
     event = database.get_event(context.user_data["edit_event"])
     if event is None:
-        await _show(query, "⚠️ That event no longer exists.\nUse /help to see the commands.")
+        await _show(query, "⚠️ That event no longer exists.")
         context.user_data.pop("edit_event", None)
         return ConversationHandler.END
 
     if query.data == "editfield:name":
-        await _show(query, f"Send the new name for “{event['title']}” (or /cancel).")
+        await _show(query, f"Send the new name for {headline(event['title'])} (or /cancel).")
         return E_NEW_NAME
 
-    if query.data == "editfield:poster":  # added
-        current = "This event has a poster already; the new one will replace it." if event.get("poster") \
+    if query.data == "editfield:description":
+        await _show(
+            query,
+            "✍️ Send the new description. Bold, italics and links are kept. (or /cancel)",
+        )
+        return E_NEW_DESCRIPTION
+
+    if query.data == "editfield:link":
+        if event.get("url"):
+            current = f"Current link: {esc(event['url'])}\n\nSend the new link, or /remove to delete it."
+        else:
+            current = "This event has no link yet. Send one (or /cancel)."
+        await _show(query, f"🔗 {current}")
+        return E_NEW_LINK
+
+    if query.data == "editfield:poster":
+        current = "The new poster replaces the current one." if event.get("poster") \
             else "This event has no poster yet."
-        await _show(query, f"🖼 {current}\nSend the new poster as a photo (not as a file), or /cancel.")
+        await _show(query, f"🖼 {current}\nSend it as a photo (not as a file), or /cancel.")
         return E_NEW_POSTER
 
     event_date = date.fromisoformat(event["date"])
     await _show(
         query,
         f"📅 Current date: {event_date.isoformat()} ({event_date.strftime('%A')})\n\n"
-        "Send the new date in the format YYYY-MM-DD (or /cancel).",
+        "Send the new date as YYYY-MM-DD (or /cancel).",
     )
     return E_NEW_DATE
 
@@ -414,88 +537,112 @@ async def edit_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     title = update.message.text.strip()
     error = _check_title(title)
     if error:
-        await update.message.reply_text(error, reply_markup=with_website())
+        await _reply(update, esc(error))
         return E_NEW_NAME
 
     event_id = context.user_data["edit_event"]
     event = database.get_event(event_id)
     if event is None:
-        await update.message.reply_text("⚠️ That event no longer exists.\nUse /help to see the commands.", reply_markup=with_website())
-        context.user_data.pop("edit_event", None)
-        return ConversationHandler.END
+        return await _event_gone(update, context)
 
     database.update_event_title(event_id, title)
     logger.info("Event #%s renamed '%s' -> '%s'.", event_id, event["title"], title)
-    # changed: after a change, offer the other fields instead of ending
-    result = f"✅ Name updated!\n\n📌 {event['title']} → {title}"
     event["title"] = title
-    return await _ask_more_changes(update, context, event, "name", result)
+    return await _ask_more_changes(update, context, event, "name", "Name updated")
 
 
 async def edit_new_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """New date typed as YYYY-MM-DD: validate it and save."""
     new_date, error = _parse_date(update.message.text)
     if error:
-        await update.message.reply_text(error, reply_markup=with_website())
+        await _reply(update, esc(error))
         return E_NEW_DATE
 
     event_id = context.user_data["edit_event"]
     event = database.get_event(event_id)
     if event is None:
-        await update.message.reply_text("⚠️ That event no longer exists.\nUse /help to see the commands.", reply_markup=with_website())
-        context.user_data.pop("edit_event", None)
-        return ConversationHandler.END
+        return await _event_gone(update, context)
 
-    old_date = date.fromisoformat(event["date"])
     database.update_event_date(event_id, new_date.isoformat())
-    logger.info("Event #%s date %s -> %s.", event_id, old_date, new_date)
-    # changed: after a change, offer the other fields instead of ending
-    result = f"✅ Date updated!\n\n📌 {event['title']}\n📅 {old_date.isoformat()} → {new_date.isoformat()}"
+    logger.info("Event #%s date %s -> %s.", event_id, event["date"], new_date)
     event["date"] = new_date.isoformat()
-    return await _ask_more_changes(update, context, event, "date", result)
+    return await _ask_more_changes(update, context, event, "date", "Date updated")
 
 
-async def edit_new_poster(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """A photo arrived for the Poster step: save its file_id."""  # added
+async def edit_new_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    description, error = _check_description(update.message)
+    if error:
+        await _reply(update, esc(error))
+        return E_NEW_DESCRIPTION
+
     event_id = context.user_data["edit_event"]
     event = database.get_event(event_id)
     if event is None:
-        await update.message.reply_text("⚠️ That event no longer exists.\nUse /help to see the commands.", reply_markup=with_website())
-        context.user_data.pop("edit_event", None)
-        return ConversationHandler.END
+        return await _event_gone(update, context)
+
+    database.update_event_description(event_id, description)
+    logger.info("Event #%s description updated.", event_id)
+    event["description"] = description
+    return await _ask_more_changes(update, context, event, "description", "Description updated")
+
+
+async def edit_new_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """A link (or /remove) arrived for the Link step."""
+    removing = update.message.text.startswith("/")
+    url = None if removing else clean_url(update.message.text)
+    if not removing and url is None:
+        await _reply(update, "That doesn't look like a link. Send something like https://forms.gle/abc123, or /cancel.")
+        return E_NEW_LINK
+
+    event_id = context.user_data["edit_event"]
+    event = database.get_event(event_id)
+    if event is None:
+        return await _event_gone(update, context)
+
+    database.update_event_url(event_id, url)
+    logger.info("Event #%s link %s.", event_id, "removed" if removing else "updated")
+    event["url"] = url
+    return await _ask_more_changes(update, context, event, "link", "Link removed" if removing else "Link updated")
+
+
+async def edit_new_poster(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """A photo arrived for the Poster step: save its file_id."""
+    event_id = context.user_data["edit_event"]
+    event = database.get_event(event_id)
+    if event is None:
+        return await _event_gone(update, context)
 
     event["poster"] = update.message.photo[-1].file_id
     database.update_event_poster(event_id, event["poster"])
     logger.info("Event #%s poster updated.", event_id)
-    # changed: after a change, offer the other fields instead of ending
-    return await _ask_more_changes(update, context, event, "poster", f"✅ Poster updated!\n\n{_event_text(event)}")
+    return await _ask_more_changes(update, context, event, "poster", "Poster updated")
 
 
 async def edit_not_a_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Please send the poster as a photo, or /cancel.", reply_markup=with_website())
+    await _reply(update, "Send the poster as a photo, or /cancel.")
     return E_NEW_POSTER
 
 
 async def edit_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """'No change' button: finish editing."""  # added
+    """'No change' button: finish editing."""
     query = update.callback_query
     await query.answer()
     event = database.get_event(context.user_data.get("edit_event"))
-    summary = f"\n\n{_event_line(event)}" if event else ""
-    await _show(query, f"✅ Editing finished.{summary}\n\nUse /help to see the commands.")
+    text = event_card(event, "✅ " + kicker("All done")) if event else "✅ Editing finished."
+    await _show(query, text)
     context.user_data.pop("edit_event", None)
     return ConversationHandler.END
 
 
 async def edit_tap_a_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Text typed while the bot is waiting for a button press."""
-    await update.message.reply_text("Please tap one of the buttons above, or send /cancel.", reply_markup=with_website())
+    await _reply(update, "Tap one of the buttons above, or send /cancel.")
     return None  # stay on the same step
 
 
 async def edit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("edit_event", None)
-    await update.message.reply_text("❌ Edit cancelled. Changes already saved are kept.\nUse /help to see the commands.", reply_markup=with_website())
+    await _reply(update, "❌ Edit cancelled. Changes already saved are kept.")
     return ConversationHandler.END
 
 
@@ -511,29 +658,23 @@ async def edit_other_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def edit_menu_expired(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """An edit button pressed after its conversation ended (old message, or another user)."""
     await update.callback_query.answer()
-    await _show(update.callback_query, "⌛ This menu has expired. Send /editevent to start again.")  # changed: photo-safe
+    await _show(update.callback_query, "⌛ This menu has expired. Send /editevent to start again.")
 
 
 # ---------- Reminders ----------
 
 async def _broadcast(bot, text, event):
-    """Sends one event (poster + text, or text only) to every registered group.
-    Returns (sent, failed) counts."""  # changed: takes the event so the poster goes too
+    """Sends one event (poster + text, or text only) to every registered group, with the
+    event's buttons and the website button. Returns (sent, failed) counts."""
     sent = failed = 0
     for group in database.get_groups():
         try:
-            await _send_event(bot, group["group_id"], text, event, reply_markup=calendar_markup(event))
+            await _send_event(bot, group["group_id"], text, event, reply_markup=with_website(event_markup(event)))
             sent += 1
         except TelegramError as error:
             failed += 1
             logger.warning("Could not send to group %s (%s): %s", group["title"], group["group_id"], error)
     return sent, failed
-
-
-def _reminder_text(event, today):
-    event_date = date.fromisoformat(event["date"])
-    when = "today" if event_date == today else "tomorrow"
-    return f"🔔 Reminder: {event['title']} is {when}!\n📅 {event_date.strftime('%A, %d %B %Y')}"
 
 
 async def send_due_reminders(context: ContextTypes.DEFAULT_TYPE):
@@ -556,90 +697,45 @@ def schedule_reminders(app):
     app.job_queue.run_once(send_due_reminders, when=10, name="event_reminders_catchup")
 
 
-@admin.admin_only
-async def send_reminder_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/sendreminder - shows the upcoming list with a button per event (plus 'All events')."""
-    today = _today()
-    events = database.get_upcoming_events(today.isoformat())
-    if not events:
-        await update.message.reply_text("📅 No upcoming events to send.\nUse /help to see the commands.", reply_markup=with_website())
-        return
-    if not database.get_groups():
-        await update.message.reply_text("No groups registered yet. Add the bot to a group first.", reply_markup=with_website())
-        return
-
-    rows = _numbered_buttons(events, "remind")
-    rows.append([InlineKeyboardButton("📋 All events", callback_data="remind:all")])
-    await update.message.reply_text(
-        _format_events(events, today) + "\n\n🔔 Tap the number of the event to remind all groups about:",
-        reply_markup=with_website(InlineKeyboardMarkup(rows)),
-    )
-
-
-@admin.admin_only
-async def send_reminder_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """A number (or 'All events') was pressed: broadcast that reminder and show the result."""
-    query = update.callback_query
-    await query.answer()
-    today = _today()
-    choice = query.data.split(":")[1]
-
-    # changed: every reminder now carries the event's full info (poster, title, date).
-    # "All events" sends one message per event.
-    if choice == "all":
-        events = database.get_upcoming_events(today.isoformat())
-        if not events:
-            await query.edit_message_text("📅 No upcoming events to send.\nUse /help to see the commands.", reply_markup=with_website())
-            return
-        what = f"the {len(events)} upcoming events"
-    else:
-        event = database.get_event(int(choice))
-        if event is None:
-            await query.edit_message_text("⚠️ That event no longer exists.\nUse /help to see the commands.", reply_markup=with_website())
-            return
-        events = [event]
-        what = f"“{event['title']}”"
-
-    sent = failed = 0
-    for event in events:
-        s, f = await _broadcast(context.bot, _event_text(event, today, prefix="🔔 Reminder:"), event)
-        sent, failed = max(sent, s), max(failed, f)  # counts are per group, not per message
-    result = f"✅ Reminder about {what} sent to {sent} group(s)."
-    if failed:
-        result += f"\n⚠️ Could not send to {failed} group(s); see the bot log."
-    await query.edit_message_text(result + "\nUse /help to see the commands.", reply_markup=with_website())  # replaces the number buttons with just the website button
-
-
 def get_handlers():
     add_event_conversation = ConversationHandler(
         entry_points=[CommandHandler("addevent", add_event_start)],
         states={
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_name)],
             DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_date)],
-            POSTER: [  # added: poster step (photo, /skip, or a hint for anything else)
+            DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_description),
+                MessageHandler(~filters.COMMAND, add_event_description_not_text),
+            ],
+            POSTER_AND_LINK: [  # a photo (link in its caption), just a link, or /skip
                 MessageHandler(filters.PHOTO, add_event_poster),
-                CommandHandler("skip", add_event_skip_poster),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_link),
+                CommandHandler("skip", add_event_skip),
                 MessageHandler(~filters.COMMAND, add_event_not_a_photo),
             ],
         },
         fallbacks=[CommandHandler("cancel", add_event_cancel)],
-        # Sending /addevent while a previous add-event is still waiting now cancels it and starts over.
+        # Sending /addevent while a previous add-event is still waiting cancels it and starts over.
         allow_reentry=True,
     )
-    # added: /editevent conversation
     buttons_only = [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_tap_a_button)]
     edit_event_conversation = ConversationHandler(
         entry_points=[CommandHandler("editevent", edit_event_start)],
         states={
             E_CHOOSE_EVENT: [CallbackQueryHandler(edit_event_chosen, pattern=r"^editevent:\d+$"), *buttons_only],
             E_CHOOSE_FIELD: [
-                CallbackQueryHandler(edit_field_chosen, pattern=r"^editfield:(name|date|poster)$"),
-                CallbackQueryHandler(edit_done, pattern=r"^editdone$"),  # added: 'No change'
+                CallbackQueryHandler(edit_field_chosen, pattern=r"^editfield:(name|date|description|link|poster)$"),
+                CallbackQueryHandler(edit_done, pattern=r"^editdone$"),  # 'No change'
                 *buttons_only,
             ],
             E_NEW_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_new_name)],
             E_NEW_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_new_date)],
-            E_NEW_POSTER: [  # added
+            E_NEW_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_new_description)],
+            E_NEW_LINK: [  # added: a link, or /remove
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_new_link),
+                CommandHandler("remove", edit_new_link),
+            ],
+            E_NEW_POSTER: [
                 MessageHandler(filters.PHOTO, edit_new_poster),
                 MessageHandler(~filters.COMMAND, edit_not_a_photo),
             ],
@@ -654,10 +750,8 @@ def get_handlers():
         add_event_conversation,
         edit_event_conversation,
         CallbackQueryHandler(edit_menu_expired, pattern=r"^edit(event|field|done)"),  # stale edit buttons
-        CommandHandler("events", list_events),  # added: /events listing
-        CallbackQueryHandler(view_event_button, pattern=r"^viewevent:\d+$"),  # added: its detail buttons
-        CommandHandler("deleteevent", delete_event_start),  # added: /deleteevent
-        CommandHandler("sendreminder", send_reminder_command),  # added: /sendreminder
-        CallbackQueryHandler(send_reminder_button, pattern=r"^remind:(\d+|all)$"),  # its buttons
-        CallbackQueryHandler(delete_event_button, pattern=r"^delevent:\d+$"),  # its event buttons
+        CommandHandler("events", list_events),
+        CallbackQueryHandler(view_event_button, pattern=r"^viewevent:\d+$"),
+        CommandHandler("deleteevent", delete_event_start),
+        CallbackQueryHandler(delete_event_button, pattern=r"^delevent:\d+$"),
     ]

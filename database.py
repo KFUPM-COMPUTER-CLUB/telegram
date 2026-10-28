@@ -65,6 +65,12 @@ def create_tables():
         columns = [row[1] for row in conn.execute("PRAGMA table_info(events)")]
         if "poster" not in columns:
             conn.execute("ALTER TABLE events ADD COLUMN poster TEXT")
+        # Added for event links: an optional link (registration, form, page) shown as a button.
+        if "url" not in columns:
+            conn.execute("ALTER TABLE events ADD COLUMN url TEXT")
+        # Added for event descriptions: HTML, so the admin's bold, italics etc. are kept.
+        if "description" not in columns:
+            conn.execute("ALTER TABLE events ADD COLUMN description TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -125,6 +131,11 @@ def prepare_scheduled_messages():
             "media_type": "TEXT",
             "media_file_id": "TEXT",
             "status": "TEXT NOT NULL DEFAULT 'pending'",
+            # Added for links and event announcements:
+            "url": "TEXT",  # optional link shown as a button under the announcement
+            "event_id": "INTEGER",  # set when the announcement is an event card
+            # Rows saved before announcements kept their formatting hold plain text (0).
+            "is_html": "INTEGER NOT NULL DEFAULT 0",
         }
 
         for name, definition in additions.items():
@@ -139,14 +150,16 @@ def prepare_scheduled_messages():
         conn.close()
 
 
-def add_scheduled_message(text, send_time, media_type=None, media_file_id=None):
+def add_scheduled_message(text, send_time, media_type=None, media_file_id=None, url=None, event_id=None):
+    """text is HTML. For an event announcement pass event_id; text is then the event's title,
+    kept for /scheduled, and the event itself is loaded when the announcement goes out."""
     return _run(
         """
         INSERT INTO scheduled_messages
-        (text, send_time, media_type, media_file_id, status)
-        VALUES (?, ?, ?, ?, 'pending')
+        (text, send_time, media_type, media_file_id, url, event_id, is_html, status)
+        VALUES (?, ?, ?, ?, ?, ?, 1, 'pending')
         """,
-        (text, send_time, media_type, media_file_id),
+        (text, send_time, media_type, media_file_id, url, event_id),
         fetch="id",
     )
 
@@ -185,14 +198,15 @@ def claim_scheduled_message(message_id):
     ) == 1
 
 
-def edit_scheduled_message(message_id, text, send_time):
+def edit_scheduled_message(message_id, text, send_time, url=None):
+    """text is HTML."""
     return _run(
         """
         UPDATE scheduled_messages
-        SET text = ?, send_time = ?
+        SET text = ?, send_time = ?, url = ?, is_html = 1
         WHERE id = ? AND status = 'pending'
         """,
-        (text, send_time, message_id),
+        (text, send_time, url, message_id),
     )
 
 
@@ -224,10 +238,14 @@ def finish_scheduled_message(message_id, status):
 # ---------- Events ----------
 # Added for the add-event feature (events.py): saves a new event row.
 
-def add_event(title, date, poster=None):
+def add_event(title, date, poster=None, url=None, description=None):
     """Saves an event. date must be text 'YYYY-MM-DD'; poster is the photo's Telegram file_id
-    or None. Returns the new event id."""  # changed: poster added
-    return _run("INSERT INTO events (title, date, poster) VALUES (?, ?, ?)", (title, date, poster), "id")
+    or None; url is an optional link; description is HTML. Returns the new event id."""
+    return _run(
+        "INSERT INTO events (title, date, poster, url, description) VALUES (?, ?, ?, ?, ?)",
+        (title, date, poster, url, description),
+        "id",
+    )
 
 
 # Added for /events: lists events that haven't passed yet.
@@ -261,6 +279,16 @@ def update_event_date(event_id, date):
 def update_event_poster(event_id, poster):
     """poster is the photo's Telegram file_id."""  # added for /editevent -> Poster
     return _run("UPDATE events SET poster = ? WHERE id = ?", (poster, event_id))
+
+
+def update_event_description(event_id, description):
+    """description is HTML."""  # added for /editevent -> Description
+    return _run("UPDATE events SET description = ? WHERE id = ?", (description, event_id))
+
+
+def update_event_url(event_id, url):
+    """url is a link, or None to remove it."""  # added for /editevent -> Link
+    return _run("UPDATE events SET url = ? WHERE id = ?", (url, event_id))
 
 
 # Added for automatic reminders.
